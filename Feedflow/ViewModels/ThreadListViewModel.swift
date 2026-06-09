@@ -144,7 +144,7 @@ class ThreadListViewModel: ObservableObject {
 
         
         // Skip if already in local DB
-        if DatabaseManager.shared.getCachedThread(threadId: thread.id) != nil {
+        if DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) != nil {
             return
         }
         
@@ -209,7 +209,7 @@ class ThreadListViewModel: ObservableObject {
                         tags: fetchedThread.tags
                     )
                     
-                    DatabaseManager.shared.saveCachedThread(threadId: thread.id, thread: updatedThread, comments: fetchedComments)
+                    DatabaseManager.shared.saveCachedThread(threadId: thread.id, serviceId: service.id, thread: updatedThread, comments: fetchedComments)
                     
                     // 3. Rate control: Wait before next download
                     try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay

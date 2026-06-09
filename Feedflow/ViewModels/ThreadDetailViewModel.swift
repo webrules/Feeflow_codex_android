@@ -54,7 +54,7 @@ class ThreadDetailViewModel: ObservableObject {
         isLatest = false
         
         // Load from cache first (instant display)
-        if let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id) {
+        if let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
             self.thread = cached.0
             self.comments = cached.1
             self.canLoadMore = !cached.1.isEmpty
@@ -81,7 +81,7 @@ class ThreadDetailViewModel: ObservableObject {
             )
             
             // Save to cache
-            DatabaseManager.shared.saveCachedThread(threadId: thread.id, thread: updatedThread, comments: fetchedComments)
+            DatabaseManager.shared.saveCachedThread(threadId: thread.id, serviceId: service.id, thread: updatedThread, comments: fetchedComments)
             
             // Update UI with fresh data
             self.thread = updatedThread

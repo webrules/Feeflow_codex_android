@@ -22,13 +22,11 @@ class ForumViewModel: ObservableObject {
         defer { isLoading = false }
         do {
             let fetchedCommunities = try await service.fetchCategories()
-            await MainActor.run {
-                self.communities = fetchedCommunities
-            }
-            // Save to DB in background
-            Task.detached { [weak self] in
-                guard let self = self else { return }
-                DatabaseManager.shared.saveCommunities(fetchedCommunities, forService: self.service.id)
+            self.communities = fetchedCommunities
+            // Save to DB (now thread-safe via dbQueue)
+            let serviceId = self.service.id
+            Task.detached {
+                DatabaseManager.shared.saveCommunities(fetchedCommunities, forService: serviceId)
             }
         } catch is CancellationError {
             // Ignore

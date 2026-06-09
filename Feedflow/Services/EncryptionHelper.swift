@@ -1,21 +1,71 @@
 import Foundation
 import CryptoKit
+import Security
 
-/// Simple encryption utility for storing credentials locally.
-/// Uses AES-GCM for symmetric encryption with a device-bound key.
+/// Encryption utility for storing credentials locally.
+/// Uses AES-GCM with a random per-install key stored in the iOS Keychain.
 class EncryptionHelper {
     static let shared = EncryptionHelper()
     
-    // A simple static key derived from a passphrase. 
-    // In production, consider using Keychain for key storage.
     private let encryptionKey: SymmetricKey
+    private static let keychainAccount = "com.feedflow.encryption-key"
     
     private init() {
-        // Create a deterministic key from a fixed seed + device identifier for basic obfuscation
-        // This is NOT highly secure but provides basic encryption at rest.
-        let seed = "FeedflowLocalEncryption2024"
-        let keyData = SHA256.hash(data: Data(seed.utf8))
-        self.encryptionKey = SymmetricKey(data: keyData)
+        self.encryptionKey = EncryptionHelper.getOrCreateKey()
+    }
+    
+    /// Retrieves an existing key from Keychain, or generates and stores a new random one.
+    private static func getOrCreateKey() -> SymmetricKey {
+        if let existingKeyData = loadFromKeychain() {
+            return SymmetricKey(data: existingKeyData)
+        }
+        
+        // Generate a new random 256-bit key
+        let newKey = SymmetricKey(size: .bits256)
+        let keyData = newKey.withUnsafeBytes { Data($0) }
+        saveToKeychain(keyData)
+        return newKey
+    }
+    
+    private static func loadFromKeychain() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainAccount,
+            kSecAttrService as String: "Feedflow",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        if status == errSecSuccess, let data = result as? Data {
+            return data
+        }
+        return nil
+    }
+    
+    private static func saveToKeychain(_ data: Data) {
+        // Delete any existing entry first
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainAccount,
+            kSecAttrService as String: "Feedflow"
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+        
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainAccount,
+            kSecAttrService as String: "Feedflow",
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+        
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        if status != errSecSuccess {
+            print("[EncryptionHelper] Warning: Failed to save key to Keychain (status: \(status))")
+        }
     }
     
     /// Encrypts a string and returns a Base64-encoded ciphertext.
@@ -24,10 +74,9 @@ class EncryptionHelper {
         
         do {
             let sealedBox = try AES.GCM.seal(data, using: encryptionKey)
-            // Combined includes nonce + ciphertext + tag
             return sealedBox.combined?.base64EncodedString()
         } catch {
-            print("Encryption error: \(error)")
+            print("[EncryptionHelper] Encryption error: \(error)")
             return nil
         }
     }
@@ -41,7 +90,7 @@ class EncryptionHelper {
             let decryptedData = try AES.GCM.open(sealedBox, using: encryptionKey)
             return String(data: decryptedData, encoding: .utf8)
         } catch {
-            print("Decryption error: \(error)")
+            print("[EncryptionHelper] Decryption error: \(error)")
             return nil
         }
     }
