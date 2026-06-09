@@ -25,6 +25,9 @@ struct ThreadDetailView: View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
             
+            if let fallbackURL = viewModel.webFallbackURL {
+                InAppBrowserView(url: fallbackURL)
+            } else {
             GeometryReader { outerGeo in
                 VStack(spacing: 0) {
                     ScrollViewReader { proxy in
@@ -227,6 +230,7 @@ struct ThreadDetailView: View {
                 .onAppear { viewportHeight = outerGeo.size.height }
                 .onChange(of: outerGeo.size) { viewportHeight = $0.height }
             }
+            } // else (web fallback)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

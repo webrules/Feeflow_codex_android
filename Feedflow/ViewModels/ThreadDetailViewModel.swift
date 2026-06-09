@@ -12,6 +12,7 @@ class ThreadDetailViewModel: ObservableObject {
     @Published var isBookmarked = false
     @Published var shouldScrollAfterReply = false
     @Published var replyingTo: Comment? = nil
+    @Published var webFallbackURL: String? = nil
     private var currentPage = 1
     
     private let service: ForumService
@@ -98,8 +99,15 @@ class ThreadDetailViewModel: ObservableObject {
             // Ignore
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            // API requires auth — fall back to web view
+            self.webFallbackURL = service.getWebURL(for: thread)
         } catch {
             print("Error loading details: \(error)")
+            // If we have no content at all, try web fallback
+            if comments.isEmpty && thread.content.isEmpty {
+                self.webFallbackURL = service.getWebURL(for: thread)
+            }
         }
     }
     

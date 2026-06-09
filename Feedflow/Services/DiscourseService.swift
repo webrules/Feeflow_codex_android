@@ -341,10 +341,15 @@ class DiscourseService: ForumService {
              throw URLError(.badURL)
          }
          
-         let (data, _) = try await URLSession.shared.data(from: url)
-         let response = try JSONDecoder().decode(ThreadDetailResponse.self, from: data)
+         let (data, response) = try await URLSession.shared.data(from: url)
          
-         let threadItems = response.threadStream.posts
+         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 403 {
+             throw URLError(.userAuthenticationRequired)
+         }
+         
+         let detailResponse = try JSONDecoder().decode(ThreadDetailResponse.self, from: data)
+         
+         let threadItems = detailResponse.threadStream.posts
          guard let firstItem = threadItems.first else {
              throw URLError(.cannotParseResponse)
          }
@@ -361,8 +366,8 @@ class DiscourseService: ForumService {
          )
          
          let mainThread = Thread(
-            id: String(response.id),
-            title: response.title,
+            id: String(detailResponse.id),
+            title: detailResponse.title,
             content: cleanContent(firstItem.cooked),
             author: opUser,
             community: Community(id: "0", name: "", description: "", category: "", activeToday: 0, onlineNow: 0),
@@ -370,7 +375,7 @@ class DiscourseService: ForumService {
             likeCount: Int(firstItem.score ?? 0),
             commentCount: threadItems.count - 1,
             isLiked: false,
-            tags: response.tags
+            tags: detailResponse.tags
          )
          
          var comments: [Comment] = []
