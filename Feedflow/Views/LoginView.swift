@@ -292,6 +292,11 @@ struct LoginView: View {
         }
         
         loginStatus[siteId] = true
+        
+        // Auto-dismiss the login view after successful login
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            dismiss()
+        }
     }
     
     private func siteDomain(_ site: ForumSite) -> String {
