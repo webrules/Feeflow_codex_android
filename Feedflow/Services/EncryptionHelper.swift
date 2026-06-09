@@ -8,6 +8,12 @@ class EncryptionHelper {
     static let shared = EncryptionHelper()
     
     private let encryptionKey: SymmetricKey
+    /// Legacy key for migrating data encrypted with the old hardcoded seed.
+    private static let legacyKey: SymmetricKey = {
+        let seed = "FeedflowLocalEncryption2024"
+        let keyData = SHA256.hash(data: Data(seed.utf8))
+        return SymmetricKey(data: keyData)
+    }()
     private static let keychainAccount = "com.feedflow.encryption-key"
     
     private init() {
@@ -82,15 +88,31 @@ class EncryptionHelper {
     }
     
     /// Decrypts a Base64-encoded ciphertext and returns the original string.
+    /// Automatically migrates data encrypted with the old hardcoded key.
     func decrypt(_ ciphertext: String) -> String? {
         guard let data = Data(base64Encoded: ciphertext) else { return nil }
         
+        // Try current Keychain-based key first
+        if let result = decryptWith(data: data, key: encryptionKey) {
+            return result
+        }
+        
+        // Fallback: try legacy hardcoded key (migrates on next encrypt)
+        if let result = decryptWith(data: data, key: EncryptionHelper.legacyKey) {
+            print("[EncryptionHelper] Decrypted with legacy key — data will be re-encrypted on next save")
+            return result
+        }
+        
+        print("[EncryptionHelper] Decryption failed with both current and legacy keys")
+        return nil
+    }
+    
+    private func decryptWith(data: Data, key: SymmetricKey) -> String? {
         do {
             let sealedBox = try AES.GCM.SealedBox(combined: data)
-            let decryptedData = try AES.GCM.open(sealedBox, using: encryptionKey)
+            let decryptedData = try AES.GCM.open(sealedBox, using: key)
             return String(data: decryptedData, encoding: .utf8)
         } catch {
-            print("[EncryptionHelper] Decryption error: \(error)")
             return nil
         }
     }
