@@ -7,17 +7,17 @@ struct ThreadListView: View {
     let service: ForumService
     @State private var isInitialLoad = true
     @State private var showNewThread = false
-    
+
     init(community: Community, service: ForumService) {
         self.community = community
         self.service = service
         _viewModel = StateObject(wrappedValue: ThreadListViewModel(service: service))
     }
-    
+
     var body: some View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
-            
+
             if viewModel.isLoading && viewModel.threads.isEmpty {
                 ProgressView()
                     .tint(.forumAccent)
@@ -32,8 +32,8 @@ struct ThreadListView: View {
                             )
                         }
                         .frame(height: 0)
-                        
-                        LazyVStack(spacing: 0) {
+
+                        LazyVStack(spacing: 10) {
                             ForEach(viewModel.threads) { thread in
                                 NavigationLink(destination: ThreadDetailView(thread: thread, service: service, contextThreads: viewModel.threads)) {
                                     ThreadRow(thread: thread)
@@ -65,16 +65,16 @@ struct ThreadListView: View {
                                                 }
                                             }
                                         } label: {
-                                            Label("不感兴趣", systemImage: "hand.thumbsdown.fill")
+                                            Label("不感兴趣", systemImage: "hand.thumbsdown")
                                         }
                                     }
                                 }
-                                
-                                Divider()
-                                    .background(Color.white.opacity(0.1))
                             }
                         }
-                        
+                        .padding(.horizontal)
+                        .padding(.top, 10)
+                        .padding(.bottom, service.canCreateThread(in: community) ? 84 : 18)
+
                         if viewModel.isLoading && !viewModel.threads.isEmpty {
                             ProgressView()
                                 .padding()
@@ -92,35 +92,34 @@ struct ThreadListView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                  HStack(spacing: 16) {
-                     Button(action: {
+                     ToolbarSymbolButton(name: FeedflowIcon.refresh) {
                         Task { await viewModel.loadTopics(for: community, isReturning: false) }
-                    }) {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundColor(.forumAccent)
                     }
-                    
-                    Button(action: {
+
+                    ToolbarSymbolButton(name: FeedflowIcon.home) {
                         navigationManager.popToRoot()
-                    }) {
-                        Image(systemName: "house")
-                            .foregroundColor(.forumAccent)
                     }
                  }
             }
         }
         .overlay(
-            Button(action: {
-                showNewThread = true
-            }) {
-                Image(systemName: "plus")
-                    .font(.system(size: 24, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 56, height: 56)
-                    .background(Color.forumAccent)
-                    .clipShape(Circle())
-                    .shadow(radius: 4)
+            Group {
+                if service.canCreateThread(in: community) {
+                    Button(action: {
+                        showNewThread = true
+                    }) {
+                        Image(systemName: FeedflowIcon.compose)
+                            .symbolRenderingMode(.hierarchical)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 56, height: 56)
+                            .background(Color.forumAccent)
+                            .clipShape(Circle())
+                            .shadow(radius: 4)
+                    }
+                    .padding()
+                }
             }
-            .padding()
             , alignment: .bottomTrailing
         )
         .sheet(isPresented: $showNewThread) {
@@ -144,80 +143,163 @@ struct ScrollOffsetPreferenceKey: PreferenceKey {
 
 struct ThreadRow: View {
     let thread: Thread
-    
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if thread.community.category != "RSS" {
-                HStack(spacing: 6) {
-                    AvatarView(urlOrName: thread.author.avatar, size: 16)
-                    
-                    Text("@\(thread.author.username)")
-                        .foregroundColor(.forumTextSecondary)
-                    
-                    Text("• \(thread.timeAgo)")
-                        .foregroundColor(.forumTextSecondary)
-                    Spacer()
-                    
-                    // Show Zhihu content type tags
-                    if thread.community.category == "zhihu", let tags = thread.tags, !tags.isEmpty {
-                        ForEach(tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.system(size: 10, weight: .semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(zhihuTagColor(tag).opacity(0.15))
-                                .foregroundColor(zhihuTagColor(tag))
-                                .cornerRadius(4)
-                        }
-                    }
-                    
-                    // Show vote count for Zhihu
-                    if thread.community.category == "zhihu" && thread.likeCount > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "hand.thumbsup.fill")
-                            Text("\(thread.likeCount)")
-                        }
-                        .font(.caption2)
-                        .foregroundColor(.forumTextSecondary)
-                    }
-                    
-                    HStack(spacing: 4) {
-                        Image(systemName: "bubble.left")
-                        Text("\(thread.commentCount)")
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(.forumTextSecondary)
-            }
-            
+            header
+
             Text(thread.title)
-                .font(.headline)
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.forumTextPrimary)
-                .lineLimit(2)
+                .lineLimit(3)
                 .multilineTextAlignment(.leading)
-            
-            // Show excerpt for Zhihu content
-            if thread.community.category == "zhihu" && !thread.content.isEmpty {
-                Text(thread.content)
+
+            if let excerpt {
+                Text(excerpt)
                     .font(.subheadline)
                     .foregroundColor(.forumTextSecondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
             }
+
+            footer
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color.forumBackground)
+        .padding(14)
+        .background(Color.forumCard)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.55), lineWidth: 1)
+        )
     }
-    
-    private func zhihuTagColor(_ tag: String) -> Color {
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            if isRSS {
+                FeedflowSymbol(
+                    name: FeedflowIcon.feed,
+                    size: 13,
+                    color: .forumAccent,
+                    background: .forumAccentSoft,
+                    frameSize: 28,
+                    shape: .circle
+                )
+            } else {
+                AvatarView(urlOrName: thread.author.avatar, size: 28, fallbackText: thread.author.username)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(primaryMetadata)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.forumTextPrimary)
+                    .lineLimit(1)
+
+                Text(secondaryMetadata)
+                    .font(.caption2)
+                    .foregroundColor(.forumTextSecondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if let firstTag = displayTags.first {
+                ThreadTagChip(text: firstTag, color: tagColor(firstTag))
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if thread.likeCount > 0 {
+                ThreadMetricPill(icon: "hand.thumbsup", text: "\(thread.likeCount)")
+            }
+
+            if !isRSS {
+                ThreadMetricPill(icon: FeedflowIcon.comments, text: "\(thread.commentCount)")
+            }
+
+            if displayTags.count > 1 {
+                ForEach(displayTags.dropFirst().prefix(2), id: \.self) { tag in
+                    ThreadTagChip(text: tag, color: tagColor(tag))
+                }
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.forumTextSecondary.opacity(0.55))
+        }
+    }
+
+    private var isRSS: Bool {
+        thread.community.category == "RSS"
+    }
+
+    private var primaryMetadata: String {
+        isRSS ? thread.community.name : "@\(thread.author.username)"
+    }
+
+    private var secondaryMetadata: String {
+        isRSS ? thread.timeAgo : "\(thread.community.name) · \(thread.timeAgo)"
+    }
+
+    private var excerpt: String? {
+        let trimmed = thread.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return (thread.community.category == "zhihu" || isRSS) ? trimmed : nil
+    }
+
+    private var displayTags: [String] {
+        guard thread.community.category == "zhihu" else { return [] }
+        return thread.tags ?? []
+    }
+
+    private func tagColor(_ tag: String) -> Color {
         switch tag {
         case "回答": return .blue
         case "文章": return .green
         case "问题": return .orange
         case "视频": return .purple
         case "想法": return .pink
-        default: return .gray
+        default: return .forumTextSecondary
         }
+    }
+}
+
+private struct ThreadMetricPill: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .symbolRenderingMode(.hierarchical)
+            Text(text)
+        }
+        .font(.caption2)
+        .fontWeight(.medium)
+        .foregroundColor(.forumTextSecondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.forumInputBackground.opacity(0.7))
+        .clipShape(Capsule())
+    }
+}
+
+private struct ThreadTagChip: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(color.opacity(0.13))
+            .clipShape(Capsule())
     }
 }

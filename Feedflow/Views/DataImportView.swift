@@ -12,32 +12,36 @@ struct RSSFeedManagerView: View {
     @State private var editMode: EditMode = .inactive
     @State private var selectedFeedIds: Set<String> = []
     @Environment(\.dismiss) var dismiss
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.forumBackground.ignoresSafeArea()
-                
+
                 VStack(spacing: 0) {
                     if rssService.feeds.isEmpty {
                         ContentUnavailableView(
                             "no_rss_feeds".localized(),
-                            systemImage: "dot.radiowaves.left.and.right",
+                            systemImage: FeedflowIcon.feed,
                             description: Text("add_feeds_description".localized())
                         )
                     } else {
                         List(selection: $selectedFeedIds) {
                             ForEach(rssService.feeds) { feed in
                                 HStack(spacing: 12) {
-                                    Image(systemName: "dot.radiowaves.left.and.right")
-                                        .foregroundColor(.forumAccent)
-                                        .frame(width: 28)
-                                    
+                                    FeedflowSymbol(
+                                        name: FeedflowIcon.feed,
+                                        size: 16,
+                                        color: .forumAccent,
+                                        background: .forumAccentSoft,
+                                        frameSize: 32
+                                    )
+
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(feed.name)
                                             .font(.system(size: 16, weight: .medium))
                                             .foregroundColor(.forumTextPrimary)
-                                        
+
                                         Text(feed.url)
                                             .font(.system(size: 12))
                                             .foregroundColor(.forumTextSecondary)
@@ -56,7 +60,7 @@ struct RSSFeedManagerView: View {
                         .listStyle(.plain)
                         .environment(\.editMode, $editMode)
                     }
-                    
+
                     // Bottom action bar when in edit mode with selections
                     if editMode == .active && !selectedFeedIds.isEmpty {
                         HStack {
@@ -67,11 +71,11 @@ struct RSSFeedManagerView: View {
                                     editMode = .inactive
                                 }
                             } label: {
-                                Label(LocalizationManager.shared.localizedString("delete_count", selectedFeedIds.count), systemImage: "trash")
+                                Label(LocalizationManager.shared.localizedString("delete_count", selectedFeedIds.count), systemImage: FeedflowIcon.trash)
                                     .font(.system(size: 16, weight: .semibold))
                             }
                             .tint(.red)
-                            
+
                             Spacer()
                         }
                         .padding()
@@ -85,7 +89,7 @@ struct RSSFeedManagerView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("done".localized()) { dismiss() }
                 }
-                
+
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 12) {
                         if !rssService.feeds.isEmpty {
@@ -96,22 +100,21 @@ struct RSSFeedManagerView: View {
                                 }
                             }
                         }
-                        
+
                         Menu {
                             Button {
                                 showAddFeed = true
                             } label: {
-                                Label("add_feed_manually".localized(), systemImage: "plus")
+                                Label("add_feed_manually".localized(), systemImage: FeedflowIcon.addCircle)
                             }
-                            
+
                             Button {
                                 showFilePicker = true
                             } label: {
-                                Label("import_from_opml".localized(), systemImage: "square.and.arrow.down")
+                                Label("import_from_opml".localized(), systemImage: FeedflowIcon.importFile)
                             }
                         } label: {
-                            Image(systemName: "plus.circle")
-                                .foregroundColor(.forumAccent)
+                            FeedflowSymbol(name: FeedflowIcon.addCircle, size: 20, color: .forumAccent)
                         }
                     }
                 }
@@ -158,7 +161,7 @@ struct RSSFeedManagerView: View {
                 TextField("feed_url".localized(), text: $newFeedURL)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
-                
+
                 Button("cancel".localized(), role: .cancel) {
                     newFeedName = ""
                     newFeedURL = ""
@@ -181,24 +184,24 @@ struct OPMLImportSheet: View {
     let importedFeeds: [(title: String, url: String)]
     let existingURLs: Set<String>
     let onImport: ([(title: String, url: String)]) -> Void
-    
+
     @State private var selectedURLs: Set<String> = []
     @Environment(\.dismiss) var dismiss
-    
+
     // Feeds that are new (not already in the feed list)
     private var newFeeds: [(title: String, url: String)] {
         importedFeeds.filter { !existingURLs.contains($0.url) }
     }
-    
+
     private var duplicateFeeds: [(title: String, url: String)] {
         importedFeeds.filter { existingURLs.contains($0.url) }
     }
-    
+
     var body: some View {
         NavigationStack {
             ZStack {
                 Color.forumBackground.ignoresSafeArea()
-                
+
                 List {
                     if !newFeeds.isEmpty {
                         Section {
@@ -213,15 +216,13 @@ struct OPMLImportSheet: View {
                                             .foregroundColor(.forumTextSecondary)
                                             .lineLimit(1)
                                     }
-                                    
+
                                     Spacer()
-                                    
+
                                     if selectedURLs.contains(feed.url) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.forumAccent)
+                                        FeedflowSymbol(name: "checkmark.circle.fill", size: 18, color: .forumAccent)
                                     } else {
-                                        Image(systemName: "circle")
-                                            .foregroundColor(.secondary)
+                                        FeedflowSymbol(name: "circle", size: 18, color: .forumTextSecondary)
                                     }
                                 }
                                 .contentShape(Rectangle())
@@ -249,7 +250,7 @@ struct OPMLImportSheet: View {
                             }
                         }
                     }
-                    
+
                     if !duplicateFeeds.isEmpty {
                         Section {
                             ForEach(duplicateFeeds, id: \.url) { feed in
@@ -263,9 +264,9 @@ struct OPMLImportSheet: View {
                                             .foregroundColor(.forumTextSecondary.opacity(0.6))
                                             .lineLimit(1)
                                     }
-                                    
+
                                     Spacer()
-                                    
+
                                     Text("already_added".localized())
                                         .font(.caption)
                                         .foregroundColor(.forumTextSecondary)

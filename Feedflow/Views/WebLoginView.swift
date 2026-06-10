@@ -8,23 +8,56 @@ struct SiteLoginConfig {
     let loginURL: String
     let successURLPatterns: [String]  // URL patterns that indicate successful login
     let oauthOptions: [OAuthOption]
-    
+    let cookieDomain: String
+    let authCookieNameFragments: [String]
+
     struct OAuthOption: Identifiable {
         let id = UUID()
         let name: String
         let icon: String      // SF Symbol name
         let loginPath: String  // Path appended to base URL
     }
-    
+
     // Optional check: success only if this cookie is present
     let requiredCookieName: String?
-    
-    init(site: ForumSite, loginURL: String, successURLPatterns: [String], oauthOptions: [OAuthOption], requiredCookieName: String? = nil) {
+
+    init(
+        site: ForumSite,
+        loginURL: String,
+        successURLPatterns: [String],
+        oauthOptions: [OAuthOption],
+        cookieDomain: String,
+        authCookieNameFragments: [String] = [],
+        requiredCookieName: String? = nil
+    ) {
         self.site = site
         self.loginURL = loginURL
         self.successURLPatterns = successURLPatterns
         self.oauthOptions = oauthOptions
+        self.cookieDomain = cookieDomain
+        self.authCookieNameFragments = authCookieNameFragments
         self.requiredCookieName = requiredCookieName
+    }
+
+    func siteCookies(from cookies: [HTTPCookie]) -> [HTTPCookie] {
+        cookies.filter { $0.domain.contains(cookieDomain) }
+    }
+
+    func hasAuthenticatedSession(in cookies: [HTTPCookie]) -> Bool {
+        let relevantCookies = siteCookies(from: cookies)
+
+        if let requiredCookieName {
+            return relevantCookies.contains { $0.name == requiredCookieName }
+        }
+
+        if authCookieNameFragments.isEmpty {
+            return !relevantCookies.isEmpty
+        }
+
+        return relevantCookies.contains { cookie in
+            let normalizedName = cookie.name.lowercased()
+            return authCookieNameFragments.contains { normalizedName.contains($0.lowercased()) }
+        }
     }
 }
 
@@ -33,23 +66,27 @@ extension SiteLoginConfig {
         switch site {
         case .rss:
             return nil  // RSS doesn't need login
-            
+
         case .fourD4Y:
             return SiteLoginConfig(
                 site: .fourD4Y,
                 loginURL: "https://www.4d4y.com/forum/logging.php?action=login",
-                successURLPatterns: ["4d4y.com/forum/index.php", "4d4y.com/forum/forumdisplay"],
-                oauthOptions: []
+                successURLPatterns: ["4d4y.com/forum/index.php", "4d4y.com/forum/forumdisplay", "4d4y.com/forum/viewthread"],
+                oauthOptions: [],
+                cookieDomain: "4d4y.com",
+                authCookieNameFragments: ["auth", "login", "member"]
             )
-            
+
         case .hackerNews:
             return SiteLoginConfig(
                 site: .hackerNews,
                 loginURL: "https://news.ycombinator.com/login",
                 successURLPatterns: ["news.ycombinator.com/news", "news.ycombinator.com/newest"],
-                oauthOptions: []
+                oauthOptions: [],
+                cookieDomain: "ycombinator.com",
+                authCookieNameFragments: ["user"]
             )
-            
+
         case .v2ex:
             return SiteLoginConfig(
                 site: .v2ex,
@@ -58,9 +95,11 @@ extension SiteLoginConfig {
                 oauthOptions: [
                     .init(name: "Google", icon: "g.circle.fill", loginPath: "https://v2ex.com/auth/google"),
                     .init(name: "Solana", icon: "wallet.pass.fill", loginPath: "https://v2ex.com/auth/solana"),
-                ]
+                ],
+                cookieDomain: "v2ex.com",
+                authCookieNameFragments: ["a2"]
             )
-            
+
         case .linuxDo:
             return SiteLoginConfig(
                 site: .linuxDo,
@@ -73,9 +112,11 @@ extension SiteLoginConfig {
                     .init(name: "Discord", icon: "bubble.left.and.bubble.right.fill", loginPath: "https://linux.do/auth/discord"),
                     .init(name: "Apple", icon: "apple.logo", loginPath: "https://linux.do/auth/apple"),
                     .init(name: "Passkey", icon: "person.badge.key.fill", loginPath: "https://linux.do/session/passkey/challenge"),
-                ]
+                ],
+                cookieDomain: "linux.do",
+                authCookieNameFragments: ["_t"]
             )
-            
+
         case .zhihu:
             return SiteLoginConfig(
                 site: .zhihu,
@@ -83,6 +124,7 @@ extension SiteLoginConfig {
                 // Re-adding generic patterns but relying on requiredCookieName for safety
                 successURLPatterns: ["zhihu.com/hot", "zhihu.com/follow", "zhihu.com/people", "zhihu.com/?tab", "zhihu.com/question", "www.zhihu.com", "zhihu.com"],
                 oauthOptions: [],
+                cookieDomain: "zhihu.com",
                 requiredCookieName: "z_c0"  // Critical for Zhihu auth
             )
         }
@@ -94,73 +136,87 @@ extension SiteLoginConfig {
 struct WebLoginView: UIViewRepresentable {
     let config: SiteLoginConfig
     let onLoginSuccess: ([HTTPCookie]) -> Void
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator(config: config, onLoginSuccess: onLoginSuccess)
     }
-    
+
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         // Use default data store so OAuth redirects through third-party domains work
         configuration.websiteDataStore = .default()
-        
+
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .always
-        
+
         // Use a Safari-like user agent to avoid Google's "disallowed_useragent" block
         // Google blocks OAuth from embedded WKWebViews with the default UA
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
-        
+
         if let url = URL(string: config.loginURL) {
             webView.load(URLRequest(url: url))
         }
-        
+
         return webView
     }
-    
+
     func updateUIView(_ uiView: WKWebView, context: Context) {}
-    
+
     class Coordinator: NSObject, WKNavigationDelegate {
         let config: SiteLoginConfig
         let onLoginSuccess: ([HTTPCookie]) -> Void
-        
+        private var didReportSuccess = false
+
         init(config: SiteLoginConfig, onLoginSuccess: @escaping ([HTTPCookie]) -> Void) {
             self.config = config
             self.onLoginSuccess = onLoginSuccess
         }
-        
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let currentURL = webView.url?.absoluteString else { return }
-            
+
             // Check if we've reached a success URL
             let isSuccess = config.successURLPatterns.contains { pattern in
                 currentURL.contains(pattern)
             }
-            
+
             if isSuccess {
                 checkCookiesWithRetry(webView: webView, retries: 5)
+            } else {
+                checkCookiesWithRetry(webView: webView, retries: 0, requireAuthenticatedCookie: true)
             }
         }
-        
-        func checkCookiesWithRetry(webView: WKWebView, retries: Int) {
+
+        func checkCookiesWithRetry(webView: WKWebView, retries: Int, requireAuthenticatedCookie: Bool = false) {
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                // If a required cookie is specified, verify it exists
-                if let requiredName = self.config.requiredCookieName {
-                    guard cookies.contains(where: { $0.name == requiredName }) else {
-                        print("[WebLogin] Matched success URL but '\(requiredName)' missing. Retries left: \(retries)")
-                        if retries > 0 {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                                self.checkCookiesWithRetry(webView: webView, retries: retries - 1)
-                            }
-                        }
-                        return
-                    }
+                guard !self.didReportSuccess else { return }
+
+                guard self.config.hasAuthenticatedSession(in: cookies) || !requireAuthenticatedCookie else {
+                    return
                 }
-                
+
+                guard self.config.hasAuthenticatedSession(in: cookies) else {
+                    print("[WebLogin] Matched success URL but authenticated cookie is missing. Retries left: \(retries)")
+                    if retries > 0 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            self.checkCookiesWithRetry(webView: webView, retries: retries - 1)
+                        }
+                    }
+                    return
+                }
+
+                let siteCookies = self.config.siteCookies(from: cookies)
+                let siteCookieNames = siteCookies.map(\.name).joined(separator: ", ")
+                print("[WebLogin] Authenticated session detected for \(self.config.site.makeService().id): \(siteCookieNames)")
+                self.didReportSuccess = true
+
+                // Fire the success callback so cookies get persisted to the app database.
+                // Without this, cookies remain only in WKWebView and are never saved,
+                // causing the community list to appear empty after login.
                 DispatchQueue.main.async {
-                    self.onLoginSuccess(cookies)
+                    self.onLoginSuccess(siteCookies)
                 }
             }
         }
@@ -174,17 +230,22 @@ struct WebLoginSheetView: View {
     let onSuccess: ([HTTPCookie]) -> Void
     @Environment(\.dismiss) var dismiss
     @State private var isLoggedIn = false
-    
+
     var body: some View {
         NavigationView {
             ZStack {
                 Color.forumBackground.ignoresSafeArea()
-                
+
                 if isLoggedIn {
                     VStack(spacing: 16) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.green)
+                        FeedflowSymbol(
+                            name: "checkmark.circle.fill",
+                            size: 46,
+                            color: .green,
+                            background: Color.green.opacity(0.12),
+                            frameSize: 82,
+                            shape: .circle
+                        )
                         Text("login_success".localized())
                             .font(.headline)
                             .foregroundColor(.forumTextPrimary)
@@ -193,9 +254,6 @@ struct WebLoginSheetView: View {
                     WebLoginView(config: config) { cookies in
                         isLoggedIn = true
                         onSuccess(cookies)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            dismiss()
-                        }
                     }
                 }
             }
@@ -203,9 +261,30 @@ struct WebLoginSheetView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("cancel".localized()) { dismiss() }
+                    Button((isLoggedIn ? "done" : "cancel").localized()) { dismiss() }
                         .foregroundColor(.forumAccent)
                 }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("save_session".localized()) {
+                        saveCurrentSession()
+                    }
+                    .foregroundColor(.forumAccent)
+                    .disabled(isLoggedIn)
+                }
+            }
+        }
+    }
+
+    private func saveCurrentSession() {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            let siteCookies = config.siteCookies(from: cookies)
+            print("[WebLogin] Manual save for \(config.site.makeService().id): \(siteCookies.count) site cookies")
+            guard !siteCookies.isEmpty else { return }
+
+            DispatchQueue.main.async {
+                isLoggedIn = true
+                onSuccess(siteCookies)
             }
         }
     }

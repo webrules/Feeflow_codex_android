@@ -5,11 +5,11 @@ struct FullScreenImageView: View {
     @Binding var isPresented: Bool
     @State private var rotation: Double = 0
     @State private var scale: CGFloat = 1.0
-    
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
+
             AsyncImage(url: URL(string: imageURL)) { phase in
                 switch phase {
                 case .empty:
@@ -33,21 +33,19 @@ struct FullScreenImageView: View {
                     EmptyView()
                 }
             }
-            
+
             // UI Controls overlay
             VStack {
                 HStack {
                     Button(action: { isPresented = false }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 30))
-                            .foregroundColor(.white)
+                        FeedflowSymbol(name: FeedflowIcon.close, size: 30, color: .white)
                             .padding()
                     }
                     Spacer()
                 }
-                
+
                 Spacer()
-                
+
                 HStack(spacing: 40) {
                     Button(action: {
                         withAnimation {
@@ -55,8 +53,7 @@ struct FullScreenImageView: View {
                         }
                     }) {
                         VStack {
-                            Image(systemName: "rotate.left.fill")
-                                .font(.title)
+                            FeedflowSymbol(name: "rotate.left.fill", size: 24, color: .white)
                             Text("rotate_left".localized())
                                 .font(.caption)
                         }
@@ -65,15 +62,14 @@ struct FullScreenImageView: View {
                         .background(Color.black.opacity(0.5))
                         .cornerRadius(10)
                     }
-                    
+
                     Button(action: {
                         withAnimation {
                             rotation += 90
                         }
                     }) {
                         VStack {
-                            Image(systemName: "rotate.right.fill")
-                                .font(.title)
+                            FeedflowSymbol(name: "rotate.right.fill", size: 24, color: .white)
                             Text("rotate_right".localized())
                                 .font(.caption)
                         }

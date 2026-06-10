@@ -13,65 +13,88 @@ class ThreadDetailViewModel: ObservableObject {
     @Published var shouldScrollAfterReply = false
     @Published var replyingTo: Comment? = nil
     private var currentPage = 1
-    
+
     private let service: ForumService
     private let contextThreads: [Thread]
-    
+
     init(thread: Thread, service: ForumService, contextThreads: [Thread] = []) {
         self.thread = thread
         self.service = service
         self.contextThreads = contextThreads
         self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: thread.id, serviceId: service.id)
     }
-    
+
     func goPrevious() {
         guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }), index > 0 else { return }
         let prev = contextThreads[index - 1]
         switchToThread(prev)
     }
-    
+
     func goNext() {
         guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }), index < contextThreads.count - 1 else { return }
         let next = contextThreads[index + 1]
         switchToThread(next)
     }
-    
+
+    var hasPreviousThread: Bool {
+        guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }) else { return false }
+        return index > 0
+    }
+
+    var hasNextThread: Bool {
+        guard let index = contextThreads.firstIndex(where: { $0.id == thread.id }) else { return false }
+        return index < contextThreads.count - 1
+    }
+
     private func switchToThread(_ newThread: Thread) {
         self.thread = newThread
         self.comments = []
         self.currentPage = 1
         self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: newThread.id, serviceId: service.id)
-        
+
         Task {
             await loadDetails()
         }
     }
-    
+
     func loadDetails() async {
+        await loadDetails(useCache: true)
+    }
+
+    func refreshDetails() async {
+        await loadDetails(useCache: false)
+    }
+
+    private func loadDetails(useCache: Bool) async {
         isLoading = true
         defer { isLoading = false }
         currentPage = 1
         isLatest = false
-        
+
         // Load from cache first (instant display)
-        if let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
-            self.thread = cached.0
-            self.comments = cached.1
-            self.canLoadMore = !cached.1.isEmpty
-        } else {
+        if useCache, let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
+            if isInvalidCachedDetail(cached.0) {
+                print("[ThreadDetailViewModel] Ignored invalid cached detail for \(service.id)/\(thread.id)")
+                comments = []
+            } else {
+                self.thread = cached.0
+                self.comments = cached.1
+                self.canLoadMore = !cached.1.isEmpty
+            }
+        } else if comments.isEmpty {
             comments = []
         }
-        
+
         // Fetch fresh data in background
         do {
             let (fetchedThread, fetchedComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
-            
+
             // Merge fetched content
             let updatedThread = Thread(
                 id: fetchedThread.id,
                 title: fetchedThread.title,
                 content: fetchedThread.content,
-                author: fetchedThread.author,
+                author: resolvedAuthor(fetched: fetchedThread.author, current: self.thread.author),
                 community: self.thread.community,
                 timeAgo: fetchedThread.timeAgo,
                 likeCount: fetchedThread.likeCount,
@@ -79,15 +102,15 @@ class ThreadDetailViewModel: ObservableObject {
                 isLiked: self.thread.isLiked,
                 tags: fetchedThread.tags
             )
-            
+
             // Save to cache
             DatabaseManager.shared.saveCachedThread(threadId: thread.id, serviceId: service.id, thread: updatedThread, comments: fetchedComments)
-            
+
             // Update UI with fresh data
             self.thread = updatedThread
             self.comments = fetchedComments
             self.isLatest = true
-            
+
             // Check max pages logic
             if let max = totalPages {
                 self.canLoadMore = currentPage < max
@@ -102,23 +125,23 @@ class ThreadDetailViewModel: ObservableObject {
             print("Error loading details: \(error)")
         }
     }
-    
+
     func loadMoreComments() async {
         guard !isLoading, canLoadMore else { return }
         isLoading = true
         defer { isLoading = false }
         let nextPage = currentPage + 1
         print("Loading more comments page: \(nextPage)")
-        
+
         do {
             let (_, newComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: nextPage)
-            
+
             if newComments.isEmpty {
                 canLoadMore = false
             } else {
                 self.comments.append(contentsOf: newComments)
                 currentPage = nextPage
-                
+
                 // Update canLoadMore based on max pages again if available
                 if let max = totalPages {
                     self.canLoadMore = currentPage < max
@@ -132,10 +155,31 @@ class ThreadDetailViewModel: ObservableObject {
             print("Error loading more comments: \(error)")
         }
     }
-    
+
+    private func resolvedAuthor(fetched: User, current: User) -> User {
+        let fetchedAvatar = fetched.avatar.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentAvatar = current.avatar.trimmingCharacters(in: .whitespacesAndNewlines)
+        let genericAvatars = Set(["", "person.circle", "person.circle.fill", "person.crop.circle", "person.crop.circle.fill"])
+
+        guard genericAvatars.contains(fetchedAvatar), !genericAvatars.contains(currentAvatar) else {
+            return fetched
+        }
+
+        return User(
+            id: fetched.id.isEmpty ? current.id : fetched.id,
+            username: fetched.username.isEmpty || fetched.username == "Unknown" ? current.username : fetched.username,
+            avatar: current.avatar,
+            role: fetched.role ?? current.role
+        )
+    }
+
+    private func isInvalidCachedDetail(_ cachedThread: Thread) -> Bool {
+        service.id == "4d4y" && cachedThread.content == "Could not parse content."
+    }
+
     func sendReply(content: String) async throws {
         var finalContent = content
-        
+
         if let replyingTo = replyingTo {
             // format quote
             // Truncate if too long? For now, full content per requirement.
@@ -143,32 +187,32 @@ class ThreadDetailViewModel: ObservableObject {
             let quote = "[quote][b]\(replyingTo.author.username) \(LocalizationManager.shared.localizedString("said")):[/b]\n\(replyingTo.content)[/quote]\n\n"
             finalContent = quote + content
         }
-        
+
         try await service.postComment(topicId: thread.id, categoryId: thread.community.id, content: finalContent)
         // Refresh to see the new comment - jump to the last page
         await refreshAfterReply()
-        
+
         await MainActor.run {
             self.replyingTo = nil
         }
     }
-    
+
     func selectCommentForReply(_ comment: Comment) {
         replyingTo = comment
     }
-    
+
     func cancelReply() {
         replyingTo = nil
     }
-    
+
     private func refreshAfterReply() async {
         isLoading = true
         defer { isLoading = false }
-        
+
         do {
             // First, get the first page again to see if total pages updated
             let (_, _, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
-            
+
             if let max = totalPages, max > 1 {
                 // If there are multiple pages, fetch the last one
                 let (_, lastPageComments, _) = try await service.fetchThreadDetail(threadId: thread.id, page: max)
@@ -187,7 +231,7 @@ class ThreadDetailViewModel: ObservableObject {
             print("Error refreshing after reply: \(error)")
         }
     }
-    
+
     func toggleBookmark() {
         DatabaseManager.shared.toggleBookmark(thread: thread, serviceId: service.id)
         isBookmarked = DatabaseManager.shared.isBookmarked(threadId: thread.id, serviceId: service.id)

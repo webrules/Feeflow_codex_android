@@ -31,9 +31,11 @@ extension Color {
     static let forumBackground = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "0B101B") : UIColor(hex: "F2F2F7") })
     static let forumCard = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "151C2C") : UIColor.white })
     static let forumAccent = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "2D62ED") : UIColor.systemBlue })
+    static let forumAccentSoft = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "203A78") : UIColor(hex: "E8F1FF") })
     static let forumTextPrimary = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor.white : UIColor.black })
     static let forumTextSecondary = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "949BA5") : UIColor.secondaryLabel })
     static let forumInputBackground = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "1C2436") : UIColor(hex: "E5E5EA") })
+    static let forumSeparator = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: "273247") : UIColor(hex: "D7D7DD") })
 }
 
 // MARK: - Conditional View Modifier

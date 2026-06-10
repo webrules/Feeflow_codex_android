@@ -9,9 +9,9 @@ enum ForumSite: String, CaseIterable, Identifiable {
     case v2ex
     case linuxDo
     case zhihu
-    
+
     var id: String { rawValue }
-    
+
     static func from(serviceId: String) -> ForumSite? {
         switch serviceId {
         case "4d4y": return .fourD4Y
@@ -23,7 +23,7 @@ enum ForumSite: String, CaseIterable, Identifiable {
         default: return nil
         }
     }
-    
+
     func makeService() -> ForumService {
         switch self {
         case .fourD4Y: return FourD4YService()
@@ -40,9 +40,9 @@ enum ForumSite: String, CaseIterable, Identifiable {
 
 class CommunitySettingsManager: ObservableObject {
     static let shared = CommunitySettingsManager()
-    
+
     private let key = "enabledCommunities"
-    
+
     @Published var enabledSites: Set<String> {
         didSet {
             // Ensure RSS is always enabled
@@ -53,7 +53,7 @@ class CommunitySettingsManager: ObservableObject {
             UserDefaults.standard.set(array, forKey: key)
         }
     }
-    
+
     private init() {
         if let saved = UserDefaults.standard.stringArray(forKey: key) {
             self.enabledSites = Set(saved)
@@ -66,11 +66,11 @@ class CommunitySettingsManager: ObservableObject {
             self.enabledSites = Set(ForumSite.allCases.map { $0.rawValue })
         }
     }
-    
+
     func isEnabled(_ site: ForumSite) -> Bool {
         enabledSites.contains(site.rawValue)
     }
-    
+
     func toggle(_ site: ForumSite) {
         // RSS cannot be toggled off
         guard site != .rss else { return }
@@ -80,7 +80,7 @@ class CommunitySettingsManager: ObservableObject {
             enabledSites.insert(site.rawValue)
         }
     }
-    
+
     var visibleSites: [ForumSite] {
         ForumSite.allCases.filter { isEnabled($0) }
     }
@@ -91,33 +91,30 @@ class CommunitySettingsManager: ObservableObject {
 struct CommunityConfigView: View {
     @ObservedObject var settingsManager = CommunitySettingsManager.shared
     @Environment(\.dismiss) private var dismiss
-    
+
     var body: some View {
         NavigationView {
             ZStack {
                 Color.forumBackground.ignoresSafeArea()
-                
+
                 List {
                     ForEach(ForumSite.allCases) { site in
                         let service = site.makeService()
                         let isOn = settingsManager.isEnabled(site)
                         let isRSS = site == .rss
-                        
+
                         HStack(spacing: 14) {
-                            AvatarView(urlOrName: service.logo, size: 32)
-                                .foregroundColor(.forumAccent)
-                            
+                            SiteIcon(service: service, size: 36)
+
                             Text(service.name)
                                 .font(.body)
                                 .foregroundColor(.forumTextPrimary)
-                            
+
                             Spacer()
-                            
+
                             if isRSS {
                                 // RSS is always on — show a locked checkmark
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.forumAccent)
-                                    .font(.title3)
+                                FeedflowSymbol(name: "checkmark.seal.fill", size: 18, color: .forumAccent)
                             } else {
                                 Toggle("", isOn: Binding(
                                     get: { isOn },
@@ -158,27 +155,29 @@ struct SiteListView: View {
     @State private var showLogin: Bool = false
     @State private var showBookmarks: Bool = false
     @State private var showCommunityConfig: Bool = false
-    
+
     var body: some View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
-            
+
             VStack(spacing: 24) {
+                homeToolbar
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+
                 Text("select_community".localized())
                     .font(.title2)
                     .bold()
                     .foregroundColor(.forumTextPrimary)
-                    .padding(.top, 40)
-                
+
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
                     ForEach(communitySettings.visibleSites) { site in
                         let service = site.makeService()
-                        
+
                         NavigationLink(value: site) {
                             VStack(spacing: 16) {
-                                AvatarView(urlOrName: service.logo, size: 40)
-                                    .foregroundColor(.forumAccent)
-                                
+                                SiteIcon(service: service, size: 52)
+
                                 Text(service.name)
                                     .font(.headline)
                                     .foregroundColor(.forumTextPrimary)
@@ -195,61 +194,8 @@ struct SiteListView: View {
                     }
                 }
                 .padding()
-                
+
                 Spacer()
-            }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        Button(action: {
-                            showCommunityConfig = true
-                        }) {
-                            Image(systemName: "gearshape")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            themeManager.isDarkMode.toggle()
-                        }) {
-                            Image(systemName: themeManager.isDarkMode ? "moon.fill" : "sun.max.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            LocalizationManager.shared.currentLanguage = 
-                                LocalizationManager.shared.currentLanguage == "en" ? "zh" : "en"
-                        }) {
-                            Text(LocalizationManager.shared.currentLanguage == "en" ? "EN" : "中")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                    }
-                }
-                
-                ToolbarItem(placement: .navigationBarLeading) {
-                    HStack(spacing: 16) {
-                        Button(action: {
-                            showLogin = true
-                        }) {
-                            Image(systemName: "person.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            showSettings = true
-                        }) {
-                            Image(systemName: "key.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                        
-                        Button(action: {
-                            showBookmarks = true
-                        }) {
-                            Image(systemName: "bookmark.fill")
-                                .foregroundColor(.forumTextPrimary)
-                        }
-                    }
-                }
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
@@ -264,5 +210,53 @@ struct SiteListView: View {
                 CommunityConfigView()
             }
         }
+    }
+
+    private var homeToolbar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 14) {
+                Button(action: { showLogin = true }) {
+                    FeedflowSymbol(name: FeedflowIcon.login, size: 18, color: .forumTextPrimary)
+                }
+
+                Button(action: { showSettings = true }) {
+                    FeedflowSymbol(name: FeedflowIcon.settings, size: 18, color: .forumTextPrimary)
+                }
+
+                Button(action: { showBookmarks = true }) {
+                    FeedflowSymbol(name: FeedflowIcon.bookmarkFill, size: 18, color: .forumTextPrimary)
+                }
+            }
+
+            Spacer(minLength: 16)
+
+            HStack(spacing: 14) {
+                Button(action: { showCommunityConfig = true }) {
+                    FeedflowSymbol(name: FeedflowIcon.communities, size: 17, color: .forumTextPrimary)
+                }
+
+                Button(action: { themeManager.isDarkMode.toggle() }) {
+                    FeedflowSymbol(name: FeedflowIcon.theme, size: 18, color: .forumTextPrimary)
+                }
+
+                Button(action: {
+                    LocalizationManager.shared.currentLanguage =
+                        LocalizationManager.shared.currentLanguage == "en" ? "zh" : "en"
+                }) {
+                    Text(LocalizationManager.shared.currentLanguage == "en" ? "EN" : "中")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.forumTextPrimary)
+                        .frame(width: 28, height: 28)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color.forumCard)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.6), lineWidth: 1)
+        )
     }
 }
