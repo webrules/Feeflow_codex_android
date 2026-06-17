@@ -291,7 +291,7 @@ class DiscourseService: ForumService {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             id = try container.decode(Int.self, forKey: .id)
-            title = try container.decode(String.self, forKey: .title)
+            title = try container.decode(String.self, forKey: .title).decodingHTMLEntities()
             fancyTitle = try container.decodeIfPresent(String.self, forKey: .fancyTitle)
             slug = try container.decode(String.self, forKey: .slug)
             postsCount = try container.decode(Int.self, forKey: .postsCount)

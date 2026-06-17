@@ -9,6 +9,8 @@ class ThreadListViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var canLoadMore = true
     @Published var isAtTop = true // Track if user is at top of list
+    @Published var refreshMessage: String?
+    @Published var needsLogin: Bool = false
 
     private var currentPage = 1
     private let service: ForumService
@@ -22,11 +24,30 @@ class ThreadListViewModel: ObservableObject {
         self.service = service
     }
 
-    func loadTopics(for community: Community, isReturning: Bool = false) async {
+    private func showRefreshMessage(_ message: String) {
+        refreshMessage = message
+        Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if refreshMessage == message {
+                refreshMessage = nil
+            }
+        }
+    }
+
+    func clearLoginRequest() {
+        needsLogin = false
+    }
+
+    func loadTopics(for community: Community, isReturning: Bool = false, forceRefresh: Bool = false) async {
         currentCommunity = community
 
         // Restore session (cookies/credentials) proactively before fetching
-        let _ = await service.restoreSession()
+        let sessionReady = await service.restoreSession()
+        if !sessionReady && service.requiresLogin {
+            needsLogin = true
+            showRefreshMessage("Login required. Redirecting to Login.")
+            return
+        }
 
         // Create cache key
         let cacheKey = "\(service.id)_\(community.id)_page1"
@@ -34,16 +55,53 @@ class ThreadListViewModel: ObservableObject {
         // Attempt to load from cache
         let cachedThreads = DatabaseManager.shared.getCachedTopics(cacheKey: cacheKey)
 
+        if forceRefresh {
+            isLoading = true
+            defer { isLoading = false }
+
+            do {
+                let newThreads = try await service.fetchCategoryThreads(categoryId: community.id, communities: [community], page: 1)
+
+                guard shouldAcceptFreshThreads(newThreads) else {
+                    if service.id == "4d4y" {
+                        needsLogin = true
+                    }
+                    showRefreshMessage("Refresh returned no data. Kept existing posts.")
+                    // Small delay to ensure UI updates propagate to refreshable modifier
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                    return
+                }
+
+                DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: newThreads)
+                self.threads = newThreads
+                self.canLoadMore = !newThreads.isEmpty
+                self.currentPage = 1
+                // Small delay to ensure UI updates propagate to refreshable modifier
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+            } catch is CancellationError {
+                // Ignore cancellation
+            } catch let error as URLError where error.code == .cancelled {
+                // Ignore cancellation
+            } catch let error as URLError where error.code == .userAuthenticationRequired {
+                print("Error force refreshing topics: \(error)")
+                needsLogin = true
+                showRefreshMessage("Login required. Redirecting to Login.")
+            } catch {
+                print("Error force refreshing topics: \(error)")
+                showRefreshMessage("Refresh failed. Check network or login and try again.")
+            }
         // If returning from detail or cache exists, load cache first
-        if isReturning || cachedThreads != nil {
+        } else if isReturning || cachedThreads != nil {
             if let threads = cachedThreads, !threads.isEmpty {
                 self.threads = threads
                 self.canLoadMore = true
                 self.currentPage = 1
             }
 
-            // Fetch fresh data in background
-            await fetchFreshData(for: community, cacheKey: cacheKey)
+            // Zhihu recommend should only refresh when user explicitly requests it.
+            if !shouldSkipBackgroundRefresh(for: community) {
+                await fetchFreshData(for: community, cacheKey: cacheKey)
+            }
         } else {
             // First time loading without cache - show loading state
             isLoading = true
@@ -64,6 +122,9 @@ class ThreadListViewModel: ObservableObject {
                 // Ignore cancellation
             } catch let error as URLError where error.code == .cancelled {
                 // Ignore cancellation
+            } catch let error as URLError where error.code == .userAuthenticationRequired {
+                print("Error loading topics: \(error)")
+                needsLogin = true
             } catch {
                 print("Error loading topics: \(error)")
             }
@@ -88,6 +149,9 @@ class ThreadListViewModel: ObservableObject {
             // Ignore
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
+        } catch let error as URLError where error.code == .userAuthenticationRequired {
+            print("Error fetching fresh data: \(error)")
+            needsLogin = true
         } catch {
             print("Error fetching fresh data: \(error)")
         }
@@ -108,12 +172,20 @@ class ThreadListViewModel: ObservableObject {
         return false
     }
 
+    private func shouldSkipBackgroundRefresh(for community: Community) -> Bool {
+        service.id == "zhihu" && community.id == "recommend"
+    }
+
     private func shouldAcceptFreshThreads(_ newThreads: [Thread]) -> Bool {
-        guard service.id == "4d4y", newThreads.isEmpty, !threads.isEmpty else {
+        // For 4d4y and Zhihu recommend: if refresh returns empty results but we have existing posts,
+        // keep the existing posts instead of showing an empty list (likely due to filtering or network issues)
+        let shouldPreserveOnEmpty = (service.id == "4d4y") || (service.id == "zhihu" && currentCommunity?.id == "recommend")
+        
+        guard shouldPreserveOnEmpty, newThreads.isEmpty, !threads.isEmpty else {
             return true
         }
 
-        print("[ThreadListViewModel] Ignored empty 4D4Y refresh to preserve \(threads.count) visible threads.")
+        print("[ThreadListViewModel] Ignored empty refresh to preserve \(threads.count) visible threads.")
         return false
     }
 

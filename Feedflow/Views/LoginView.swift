@@ -3,6 +3,7 @@ import WebKit
 
 struct LoginView: View {
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var navigationManager: NavigationManager
     @ObservedObject var localizationManager = LocalizationManager.shared
 
     // Sites that support login (excludes RSS)
@@ -12,6 +13,7 @@ struct LoginView: View {
     @State private var showWebLogin = false
     @State private var oauthOverrideURL: String? = nil  // When set, overrides the default login URL
     @State private var loginStatus: [String: Bool] = [:]
+    @State private var isCompletingLogin = false
 
     init(initialSite: ForumSite? = nil) {
         _selectedSite = State(initialValue: initialSite ?? .fourD4Y)
@@ -33,11 +35,13 @@ struct LoginView: View {
             .navigationTitle("login".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(placement: .bottomBar) {
                     Button("cancel".localized()) { dismiss() }
                         .foregroundColor(.forumAccent)
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .sheet(isPresented: $showWebLogin, onDismiss: {
                 oauthOverrideURL = nil  // Reset override when sheet closes
                 loadLoginStatuses()
@@ -131,8 +135,14 @@ struct LoginView: View {
     private var loginOptionsForSelectedSite: some View {
         VStack(spacing: 16) {
             if let config = SiteLoginConfig.config(for: selectedSite) {
-                loginStatusCard
-                webLoginButton(config: config)
+                let service = selectedSite.makeService()
+                let isLoggedIn = loginStatus[service.id] == true
+
+                if isLoggedIn {
+                    signedInCard(config: config)
+                } else {
+                    combinedLoginCard(config: config)
+                }
 
                 if !config.oauthOptions.isEmpty {
                     oauthSection(config: config)
@@ -143,98 +153,98 @@ struct LoginView: View {
         }
     }
 
-    private var loginStatusCard: some View {
-        let service = selectedSite.makeService()
-        let isLoggedIn = loginStatus[service.id] == true
+    private func signedInCard(config: SiteLoginConfig) -> some View {
+        let service = config.site.makeService()
 
         return HStack(spacing: 12) {
             FeedflowSymbol(
-                name: isLoggedIn ? "checkmark.seal.fill" : "person.crop.circle.badge.exclamationmark",
+                name: "checkmark.seal.fill",
                 size: 18,
-                color: isLoggedIn ? .green : .forumTextSecondary,
-                background: (isLoggedIn ? Color.green : Color.forumTextSecondary).opacity(0.12),
+                color: .green,
+                background: Color.green.opacity(0.12),
                 frameSize: 40,
                 shape: .circle
             )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("login_status".localized())
-                    .font(.caption)
-                    .foregroundColor(.forumTextSecondary)
-                    .textCase(.uppercase)
-                Text(isLoggedIn ? "signed_in".localized() : "signed_out".localized())
+                Text("signed_in".localized())
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.forumTextPrimary)
+                Text(service.name)
+                    .font(.system(size: 12))
+                    .foregroundColor(.forumTextSecondary)
             }
 
             Spacer()
 
-            if isLoggedIn {
-                Button(action: {
-                    logout(site: selectedSite)
-                }) {
-                    HStack(spacing: 6) {
-                        FeedflowSymbol(name: "rectangle.portrait.and.arrow.right", size: 14, color: .red)
-                        Text("logout".localized())
-                            .font(.system(size: 14, weight: .semibold))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.red.opacity(0.10))
-                    .cornerRadius(10)
-                }
-                .buttonStyle(.plain)
+            Button(action: { showWebLogin = true }) {
+                FeedflowSymbol(name: "arrow.up.forward.app.fill", size: 18, color: .forumAccent)
             }
+            .buttonStyle(.plain)
+
+            Button(action: {
+                logout(site: selectedSite)
+            }) {
+                HStack(spacing: 6) {
+                    FeedflowSymbol(name: "rectangle.portrait.and.arrow.right", size: 14, color: .red)
+                    Text("logout".localized())
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.red.opacity(0.10))
+                .cornerRadius(10)
+            }
+            .buttonStyle(.plain)
         }
         .padding()
         .background(Color.forumCard)
         .cornerRadius(12)
     }
 
-    private func webLoginButton(config: SiteLoginConfig) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("login_with_browser".localized())
-                .font(.caption)
-                .foregroundColor(.forumTextSecondary)
-                .textCase(.uppercase)
+    private func combinedLoginCard(config: SiteLoginConfig) -> some View {
+        let service = config.site.makeService()
 
-            Button(action: {
-                oauthOverrideURL = nil
-                showWebLogin = true
-            }) {
-                HStack(spacing: 12) {
-                    FeedflowSymbol(
-                        name: FeedflowIcon.browser,
-                        size: 18,
-                        color: .forumAccent,
-                        background: .forumAccentSoft,
-                        frameSize: 40
-                    )
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(LocalizationManager.shared.localizedString("login_to_site") + " " + config.site.makeService().name)
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("login_captcha_support".localized())
-                            .font(.system(size: 12))
-                            .foregroundColor(.forumTextSecondary)
-                    }
-
-                    Spacer()
-
-                    FeedflowSymbol(name: "arrow.up.forward.app.fill", size: 18, color: .forumAccent)
-                }
-                .padding()
-                .background(Color.forumCard)
-                .cornerRadius(12)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.forumAccent.opacity(0.3), lineWidth: 1)
+        return Button(action: {
+            oauthOverrideURL = nil
+            showWebLogin = true
+        }) {
+            HStack(spacing: 12) {
+                FeedflowSymbol(
+                    name: "person.crop.circle.badge.exclamationmark",
+                    size: 18,
+                    color: .forumTextSecondary,
+                    background: Color.forumTextSecondary.opacity(0.12),
+                    frameSize: 40,
+                    shape: .circle
                 )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("signed_out".localized())
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.forumTextPrimary)
+                    Text(LocalizationManager.shared.localizedString("login_to_site") + " " + service.name)
+                        .font(.system(size: 12))
+                        .foregroundColor(.forumTextSecondary)
+                }
+
+                Spacer()
+
+                FeedflowSymbol(name: "arrow.up.forward.app.fill", size: 18, color: .forumAccent)
             }
-            .foregroundColor(.forumTextPrimary)
-            .buttonStyle(.plain)
+            .padding()
+            .background(Color.forumCard)
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.forumAccent.opacity(0.3), lineWidth: 1)
+            )
         }
+        .foregroundColor(.forumTextPrimary)
+        .buttonStyle(.plain)
     }
+
+
 
     private func oauthSection(config: SiteLoginConfig) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -332,13 +342,22 @@ struct LoginView: View {
             print("[Login] CRITICAL WARNING: Zhihu login success but 'z_c0' cookie is missing! API requests will likely fail.")
         }
 
-        DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: relevantCookies)
+        // Make session-only cookies persistent (30 days) so they survive app restarts.
+        // Discuz's cdb_auth is set as session cookie but should persist with "cookietime".
+        let persistentCookies = relevantCookies.map { cookie -> HTTPCookie in
+            if cookie.expiresDate != nil { return cookie }
+            var props = cookie.properties ?? [:]
+            props[.expires] = Date().addingTimeInterval(30 * 24 * 3600)
+            return HTTPCookie(properties: props) ?? cookie
+        }
+
+        DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: persistentCookies)
 
         // Verify cookies were persisted
         let verified = DatabaseManager.shared.getCookies(siteId: siteId) ?? []
         print("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
 
-        replaceRuntimeCookies(domainFilter: domainFilter, cookies: relevantCookies)
+        replaceRuntimeCookies(domainFilter: domainFilter, cookies: persistentCookies)
 
         // Verify the session is actually usable by calling restoreSession.
         // Don't set loginStatus to false first — just let the async verification update it.
@@ -348,6 +367,23 @@ struct LoginView: View {
                 loginStatus[siteId] = sessionValid
                 if !sessionValid {
                     print("[Login] WARNING: Session verification FAILED after login for \(siteId)")
+                    isCompletingLogin = false
+                    return
+                }
+
+                guard !isCompletingLogin else { return }
+                isCompletingLogin = true
+
+                // Auto-close login flows and navigate to selected site's categories.
+                showWebLogin = false
+                dismiss()
+
+                Task {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    await MainActor.run {
+                        navigationManager.popToRoot()
+                        navigationManager.path.append(site)
+                    }
                 }
             }
         }

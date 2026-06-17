@@ -186,6 +186,9 @@ struct DailyRSSSummaryView: View {
                         }
                         .padding()
                     }
+                    .refreshable {
+                        await viewModel.generateSummary(forceRefresh: true)
+                    }
                 } else {
                     // Initial State? Should auto-start?
                     // Or "No updates"
@@ -204,12 +207,14 @@ struct DailyRSSSummaryView: View {
             .navigationTitle("daily_rss_summary".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .bottomBar) {
                     Button(action: { dismiss() }) {
                         FeedflowSymbol(name: FeedflowIcon.close, size: 20, color: .forumTextSecondary)
                     }
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .task {
                 if viewModel.dailySummary.isEmpty && !viewModel.isLoading {
                     await viewModel.generateSummary()

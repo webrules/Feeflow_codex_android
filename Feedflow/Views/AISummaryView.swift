@@ -15,6 +15,10 @@ struct AISummaryView: View {
     // In a real app, inject this or manage lifecycle better
     private let geminiService = GeminiService()
 
+    private var summaryCacheKey: String {
+        "\(threadId)_\(serviceId)_\(localizationManager.currentLanguage)"
+    }
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -106,23 +110,27 @@ struct AISummaryView: View {
             .navigationTitle("ai_assistant".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        speechService.speak(summary, language: localizationManager.currentLanguage)
-                    }) {
-                        FeedflowSymbol(name: speechService.isSpeaking ? "speaker.wave.3.fill" : "speaker.wave.2.fill", size: 18, color: .forumAccent)
-                    }
-                }
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Button(action: {
+                            speechService.speak(summary, language: localizationManager.currentLanguage)
+                        }) {
+                            FeedflowSymbol(name: speechService.isSpeaking ? "speaker.wave.3.fill" : "speaker.wave.2.fill", size: 18, color: .forumAccent)
+                        }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: {
-                        speechService.stop()
-                        dismiss()
-                    }) {
-                        FeedflowSymbol(name: FeedflowIcon.close, size: 20, color: .forumTextSecondary)
+                        Spacer()
+
+                        Button(action: {
+                            speechService.stop()
+                            dismiss()
+                        }) {
+                            FeedflowSymbol(name: FeedflowIcon.close, size: 20, color: .forumTextSecondary)
+                        }
                     }
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .task {
                 await generateSummary(forceRefresh: false)
             }
@@ -135,7 +143,7 @@ struct AISummaryView: View {
         isCached = false
 
         // Check cache first if not forcing refresh
-        if !forceRefresh, let cached = DatabaseManager.shared.getSummary(threadId: threadId, serviceId: serviceId) {
+        if !forceRefresh, let cached = DatabaseManager.shared.getSummary(threadId: summaryCacheKey, serviceId: serviceId) {
             await MainActor.run {
                 self.summary = cached
                 self.isCached = true
@@ -148,7 +156,7 @@ struct AISummaryView: View {
             let result = try await geminiService.generateSummary(for: content)
 
             // Save to database
-            DatabaseManager.shared.saveSummary(threadId: threadId, serviceId: serviceId, summary: result)
+            DatabaseManager.shared.saveSummary(threadId: summaryCacheKey, serviceId: serviceId, summary: result)
 
             await MainActor.run {
                 self.summary = result

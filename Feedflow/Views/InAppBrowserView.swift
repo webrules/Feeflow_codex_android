@@ -28,27 +28,31 @@ struct InAppBrowserView: View {
             .navigationTitle(webViewModel.title.isEmpty ? (pageTitle ?? "browser".localized()) : webViewModel.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("done".localized()) { dismiss() }
-                        .foregroundColor(.forumAccent)
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        // Bookmark
-                        Button(action: toggleBookmark) {
-                            FeedflowSymbol(
-                                name: isBookmarked ? FeedflowIcon.bookmarkFill : FeedflowIcon.bookmark,
-                                size: 18,
-                                color: isBookmarked ? .forumAccent : .forumTextPrimary
-                            )
-                        }
-                        // Share
-                        ShareLink(item: URL(string: webViewModel.currentURL ?? url) ?? URL(string: url)!) {
-                            FeedflowSymbol(name: FeedflowIcon.share, size: 18, color: .forumTextPrimary)
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Button("done".localized()) { dismiss() }
+                            .foregroundColor(.forumAccent)
+
+                        Spacer()
+
+                        HStack(spacing: 16) {
+                            Button(action: toggleBookmark) {
+                                FeedflowSymbol(
+                                    name: isBookmarked ? FeedflowIcon.bookmarkFill : FeedflowIcon.bookmark,
+                                    size: 18,
+                                    color: isBookmarked ? .forumAccent : .forumTextPrimary
+                                )
+                            }
+
+                            ShareLink(item: URL(string: webViewModel.currentURL ?? url) ?? URL(string: url)!) {
+                                FeedflowSymbol(name: FeedflowIcon.share, size: 18, color: .forumTextPrimary)
+                            }
                         }
                     }
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .onAppear {
                 isBookmarked = DatabaseManager.shared.isURLBookmarked(url: url)
             }

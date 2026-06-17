@@ -221,10 +221,7 @@ class V2EXService: ForumService {
             let titleRaw = String(html[titleRange])
 
             // Clean title (sometimes has entities)
-            let title = titleRaw.replacingOccurrences(of: "&amp;", with: "&")
-                                .replacingOccurrences(of: "&lt;", with: "<")
-                                .replacingOccurrences(of: "&gt;", with: ">")
-                                .replacingOccurrences(of: "&quot;", with: "\"")
+            let title = titleRaw.decodingHTMLEntities()
 
             // For now, simple placeholder for author/replies as extracting them reliably requires matching the exact surrounding table cell which is tricky with simple regex on full HTML.
             // We can try to approximate: look ahead for count_livid.
@@ -259,7 +256,7 @@ class V2EXService: ForumService {
                       let titleRange = Range(titleMatch.range(at: 2), in: cell) else { continue }
 
                 let id = String(cell[idRange])
-                let title = String(cell[titleRange]).replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
+                let title = String(cell[titleRange]).decodingHTMLEntities()
 
                 // Extract Author: <strong><a href="/member/username" ...>username</a></strong>
                 var authorName = "Unknown"
@@ -322,7 +319,7 @@ class V2EXService: ForumService {
         if let titleRegex = try? NSRegularExpression(pattern: "<h1[^>]*>([^<]+)</h1>"),
            let match = titleRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
            let r = Range(match.range(at: 1), in: html) {
-             title = String(html[r])
+             title = String(html[r]).decodingHTMLEntities()
         }
 
         // 2. Extract Content: <div class="topic_content">...</div>

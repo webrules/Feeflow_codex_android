@@ -52,16 +52,21 @@ struct BookmarksView: View {
                         }
                         .padding()
                     }
+                    .refreshable {
+                        viewModel.loadBookmarks()
+                    }
                 }
             }
             .navigationTitle("bookmarks".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .bottomBar) {
                     Button("close".localized()) { dismiss() }
                         .foregroundColor(.forumAccent)
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .onAppear {
                 viewModel.loadBookmarks()
             }

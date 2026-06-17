@@ -86,39 +86,43 @@ struct RSSFeedManagerView: View {
             .navigationTitle("manage_feeds".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("done".localized()) { dismiss() }
-                }
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Button("done".localized()) { dismiss() }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
-                        if !rssService.feeds.isEmpty {
-                            Button(editMode == .active ? "done".localized() : "edit".localized()) {
-                                withAnimation {
-                                    editMode = editMode == .active ? .inactive : .active
-                                    selectedFeedIds.removeAll()
+                        Spacer()
+
+                        HStack(spacing: 12) {
+                            if !rssService.feeds.isEmpty {
+                                Button(editMode == .active ? "done".localized() : "edit".localized()) {
+                                    withAnimation {
+                                        editMode = editMode == .active ? .inactive : .active
+                                        selectedFeedIds.removeAll()
+                                    }
                                 }
                             }
-                        }
 
-                        Menu {
-                            Button {
-                                showAddFeed = true
-                            } label: {
-                                Label("add_feed_manually".localized(), systemImage: FeedflowIcon.addCircle)
-                            }
+                            Menu {
+                                Button {
+                                    showAddFeed = true
+                                } label: {
+                                    Label("add_feed_manually".localized(), systemImage: FeedflowIcon.addCircle)
+                                }
 
-                            Button {
-                                showFilePicker = true
+                                Button {
+                                    showFilePicker = true
+                                } label: {
+                                    Label("import_from_opml".localized(), systemImage: FeedflowIcon.importFile)
+                                }
                             } label: {
-                                Label("import_from_opml".localized(), systemImage: FeedflowIcon.importFile)
+                                FeedflowSymbol(name: FeedflowIcon.addCircle, size: 20, color: .forumAccent)
                             }
-                        } label: {
-                            FeedflowSymbol(name: FeedflowIcon.addCircle, size: 20, color: .forumAccent)
                         }
                     }
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .fileImporter(
                 isPresented: $showFilePicker,
                 allowedContentTypes: [.xml, UTType(filenameExtension: "opml") ?? .xml],
@@ -283,18 +287,23 @@ struct OPMLImportSheet: View {
             .navigationTitle("import_from_opml".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("cancel".localized()) { dismiss() }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(LocalizationManager.shared.localizedString("import_count", selectedURLs.count)) {
-                        let feedsToImport = newFeeds.filter { selectedURLs.contains($0.url) }
-                        onImport(feedsToImport)
-                        dismiss()
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Button("cancel".localized()) { dismiss() }
+
+                        Spacer()
+
+                        Button(LocalizationManager.shared.localizedString("import_count", selectedURLs.count)) {
+                            let feedsToImport = newFeeds.filter { selectedURLs.contains($0.url) }
+                            onImport(feedsToImport)
+                            dismiss()
+                        }
+                        .disabled(selectedURLs.isEmpty)
                     }
-                    .disabled(selectedURLs.isEmpty)
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .onAppear {
                 // Pre-select all new feeds
                 selectedURLs = Set(newFeeds.map { $0.url })

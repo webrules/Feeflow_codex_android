@@ -112,6 +112,9 @@ struct ThreadDetailView: View {
                             }
                             .padding()
                         }
+                        .refreshable {
+                            await viewModel.refreshDetails()
+                        }
                         .onChange(of: viewModel.comments) { _ in
                             if viewModel.shouldScrollAfterReply {
                                 Task {
@@ -220,14 +223,16 @@ struct ThreadDetailView: View {
     }
 
     private var backSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 20)
+        DragGesture(minimumDistance: 12)
             .onEnded { value in
                 let horizontal = value.translation.width
                 let vertical = value.translation.height
-                let startedAtLeftEdge = value.startLocation.x <= 36
-                let isBackSwipe = horizontal > 70 && abs(horizontal) > abs(vertical) * 1.4
+                let predictedHorizontal = value.predictedEndTranslation.width
+                let startedNearLeftEdge = value.startLocation.x <= 80
+                let isHorizontalSwipe = abs(horizontal) > abs(vertical) * 1.2
+                let hasEnoughDistance = horizontal > 45 || predictedHorizontal > 90
 
-                if startedAtLeftEdge && isBackSwipe {
+                if startedNearLeftEdge && isHorizontalSwipe && hasEnoughDistance {
                     dismiss()
                 }
             }

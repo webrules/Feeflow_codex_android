@@ -19,18 +19,23 @@ struct SettingsView: View {
             }
             .navigationTitle("settings".localized())
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("cancel".localized()) {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("save".localized()) {
-                        saveKey()
-                        dismiss()
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Button("cancel".localized()) {
+                            dismiss()
+                        }
+
+                        Spacer()
+
+                        Button("save".localized()) {
+                            saveKey()
+                            dismiss()
+                        }
                     }
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
             .onAppear {
                 loadKey()
             }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CommunitiesView: View {
     @StateObject private var viewModel: ForumViewModel
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var navigationManager: NavigationManager
     let service: ForumService
     @State private var showFeedManager = false
@@ -37,14 +38,29 @@ struct CommunitiesView: View {
                     }
                     .padding(.top)
                 }
+                .refreshable {
+                    await viewModel.refresh()
+                }
             }
         }
-        .navigationTitle(service.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(Color.forumBackground, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .simultaneousGesture(backSwipeGesture)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
+            ToolbarItem(placement: .bottomBar) {
                 HStack(spacing: 16) {
+                    ToolbarSymbolButton(name: FeedflowIcon.back) {
+                        dismiss()
+                    }
+
+                    Text(service.name)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.forumTextPrimary)
+                        .lineLimit(1)
+
+                    Spacer()
+
                     // Show "Manage Feeds" button only for RSS
                     if service.id == "rss" {
                         Button(action: {
@@ -72,6 +88,8 @@ struct CommunitiesView: View {
                 }
             }
         }
+        .toolbarBackground(Color.forumBackground, for: .bottomBar)
+        .toolbarBackground(.visible, for: .bottomBar)
         .sheet(isPresented: $showFeedManager, onDismiss: {
             // Refresh communities after managing feeds
             Task { await viewModel.refresh() }
@@ -97,6 +115,22 @@ struct CommunitiesView: View {
                 showLoginSheet = true
             }
         }
+    }
+
+    private var backSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                let predictedHorizontal = value.predictedEndTranslation.width
+                let startedNearLeftEdge = value.startLocation.x <= 80
+                let isHorizontalSwipe = abs(horizontal) > abs(vertical) * 1.2
+                let hasEnoughDistance = horizontal > 45 || predictedHorizontal > 90
+
+                if startedNearLeftEdge && isHorizontalSwipe && hasEnoughDistance {
+                    dismiss()
+                }
+            }
     }
 }
 
