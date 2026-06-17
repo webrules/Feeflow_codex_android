@@ -2,11 +2,13 @@ import SwiftUI
 
 struct ThreadListView: View {
     @StateObject private var viewModel: ThreadListViewModel
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var navigationManager: NavigationManager
     let community: Community
     let service: ForumService
     @State private var isInitialLoad = true
     @State private var showNewThread = false
+    @State private var showLoginSheet = false
 
     init(community: Community, service: ForumService) {
         self.community = community
@@ -73,12 +75,15 @@ struct ThreadListView: View {
                         }
                         .padding(.horizontal)
                         .padding(.top, 10)
-                        .padding(.bottom, service.canCreateThread(in: community) ? 84 : 18)
+                        .padding(.bottom, 18)
 
                         if viewModel.isLoading && !viewModel.threads.isEmpty {
                             ProgressView()
                                 .padding()
                         }
+                    }
+                    .refreshable {
+                        await viewModel.loadTopics(for: community, forceRefresh: true)
                     }
                     .coordinateSpace(name: "scroll")
                     .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
@@ -87,13 +92,62 @@ struct ThreadListView: View {
                     }
                 }
             }
+
+            if let refreshMessage = viewModel.refreshMessage {
+                VStack {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.orange)
+
+                        Text(refreshMessage)
+                            .font(.caption)
+                            .foregroundColor(.forumTextPrimary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.forumCard)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.forumSeparator.opacity(0.7), lineWidth: 1)
+                    )
+                    .padding(.horizontal)
+                    .padding(.top, 10)
+
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: refreshMessage)
+            }
         }
-        .navigationTitle(community.name)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .simultaneousGesture(backSwipeGesture)
         .toolbar {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                 HStack(spacing: 16) {
-                     ToolbarSymbolButton(name: FeedflowIcon.refresh) {
-                        Task { await viewModel.loadTopics(for: community, isReturning: false) }
+            ToolbarItem(placement: .bottomBar) {
+                 HStack(spacing: 12) {
+                     ToolbarSymbolButton(name: FeedflowIcon.back) {
+                        dismiss()
+                    }
+
+                    Text(community.name)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.forumTextPrimary)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    if service.canCreateThread(in: community) {
+                        ToolbarSymbolButton(name: FeedflowIcon.compose) {
+                            showNewThread = true
+                        }
+                    }
+
+                    ToolbarSymbolButton(name: FeedflowIcon.refresh) {
+                        Task { await viewModel.loadTopics(for: community, isReturning: false, forceRefresh: true) }
                     }
 
                     ToolbarSymbolButton(name: FeedflowIcon.home) {
@@ -102,34 +156,43 @@ struct ThreadListView: View {
                  }
             }
         }
-        .overlay(
-            Group {
-                if service.canCreateThread(in: community) {
-                    Button(action: {
-                        showNewThread = true
-                    }) {
-                        Image(systemName: FeedflowIcon.compose)
-                            .symbolRenderingMode(.hierarchical)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 56, height: 56)
-                            .background(Color.forumAccent)
-                            .clipShape(Circle())
-                            .shadow(radius: 4)
-                    }
-                    .padding()
-                }
-            }
-            , alignment: .bottomTrailing
-        )
+        .toolbarBackground(Color.forumBackground, for: .bottomBar)
+        .toolbarBackground(.visible, for: .bottomBar)
         .sheet(isPresented: $showNewThread) {
             NewThreadView(category: community, service: service)
+        }
+        .sheet(isPresented: $showLoginSheet, onDismiss: {
+            Task { await viewModel.loadTopics(for: community, isReturning: false, forceRefresh: true) }
+        }) {
+            LoginView(initialSite: ForumSite.from(serviceId: service.id))
+        }
+        .onChange(of: viewModel.needsLogin) { needsLogin in
+            if needsLogin {
+                viewModel.clearLoginRequest()
+                showLoginSheet = true
+            }
         }
         .task {
             let isReturning = !isInitialLoad
             await viewModel.loadTopics(for: community, isReturning: isReturning)
             isInitialLoad = false
         }
+    }
+
+    private var backSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onEnded { value in
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                let predictedHorizontal = value.predictedEndTranslation.width
+                let startedNearLeftEdge = value.startLocation.x <= 80
+                let isHorizontalSwipe = abs(horizontal) > abs(vertical) * 1.2
+                let hasEnoughDistance = horizontal > 45 || predictedHorizontal > 90
+
+                if startedNearLeftEdge && isHorizontalSwipe && hasEnoughDistance {
+                    dismiss()
+                }
+            }
     }
 }
 

@@ -20,6 +20,7 @@ class DatabaseManager {
         createCacheTables()
         createBookmarksTable()
         createURLBookmarksTable()
+        createFilteredPostsTable()
         migrateSchemas()
     }
 
@@ -207,6 +208,101 @@ class DatabaseManager {
         }
     }
 
+    // MARK: - Filtered Posts (Zhihu Read/Not-Interested Tracking)
+
+    private func createFilteredPostsTable() {
+        let createTableString = """
+        CREATE TABLE IF NOT EXISTS filtered_posts(
+            postId TEXT PRIMARY KEY,
+            serviceId TEXT,
+            filteredAt INTEGER
+        );
+        """
+        var statement: OpaquePointer?
+        if sqlite3_prepare_v2(db, createTableString, -1, &statement, nil) == SQLITE_OK {
+            if sqlite3_step(statement) == SQLITE_DONE {
+                print("[DB] Filtered posts table ready")
+            }
+        } else {
+            print("[DB] Failed to create filtered_posts table")
+        }
+        sqlite3_finalize(statement)
+    }
+
+    /// Mark a post as filtered (viewed or marked not-interested)
+    func addFilteredPost(postId: String, serviceId: String) {
+        dbQueue.sync {
+            let sql = "INSERT OR REPLACE INTO filtered_posts (postId, serviceId, filteredAt) VALUES (?, ?, ?);"
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (postId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(statement, 2, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int64(statement, 3, Int64(Date().timeIntervalSince1970))
+                if sqlite3_step(statement) != SQLITE_DONE {
+                    print("[DB] Error adding filtered post: \(postId)")
+                }
+            }
+            sqlite3_finalize(statement)
+        }
+    }
+
+    /// Check if a post is filtered
+    func isPostFiltered(postId: String, serviceId: String) -> Bool {
+        dbQueue.sync {
+            let sql = "SELECT 1 FROM filtered_posts WHERE postId = ? AND serviceId = ?;"
+            var statement: OpaquePointer?
+            var result = false
+
+            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (postId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_text(statement, 2, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                if sqlite3_step(statement) == SQLITE_ROW {
+                    result = true
+                }
+            }
+            sqlite3_finalize(statement)
+            return result
+        }
+    }
+
+    /// Get all filtered post IDs for a service
+    func getFilteredPostIds(serviceId: String) -> [String] {
+        dbQueue.sync {
+            let sql = "SELECT postId FROM filtered_posts WHERE serviceId = ?;"
+            var statement: OpaquePointer?
+            var result: [String] = []
+
+            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                while sqlite3_step(statement) == SQLITE_ROW {
+                    if let postIdPtr = sqlite3_column_text(statement, 0) {
+                        result.append(String(cString: postIdPtr))
+                    }
+                }
+            }
+            sqlite3_finalize(statement)
+            return result
+        }
+    }
+
+    /// Remove filtered posts older than 3 months (90 days)
+    func cleanupOldFilteredPosts(serviceId: String) {
+        dbQueue.sync {
+            let ninetyDaysAgo = Int64(Date().timeIntervalSince1970) - (90 * 24 * 60 * 60)
+            let sql = "DELETE FROM filtered_posts WHERE serviceId = ? AND filteredAt < ?;"
+            var statement: OpaquePointer?
+
+            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                sqlite3_bind_int64(statement, 2, ninetyDaysAgo)
+                if sqlite3_step(statement) == SQLITE_DONE {
+                    print("[DB] Cleaned up old filtered posts for \(serviceId)")
+                }
+            }
+            sqlite3_finalize(statement)
+        }
+    }
+
     // MARK: - Cookie Storage (encrypted)
 
     /// Save cookies with merge — merges new cookies into existing ones (for incremental updates)
@@ -295,6 +391,8 @@ class DatabaseManager {
             return nil
         }
 
+        let storedNames = array.compactMap { $0["name"] as? String }
+        print("[DB DEBUG] getCookies for \(siteId): stored=\(storedNames.joined(separator: ", "))")
         var cookies: [HTTPCookie] = []
         for dict in array {
             var properties: [HTTPCookiePropertyKey: Any] = [:]

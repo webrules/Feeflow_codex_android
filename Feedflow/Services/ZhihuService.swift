@@ -310,6 +310,7 @@ struct ZhihuArticleDetail: Codable {
     let id: Int?
     let title: String?
     let content: String?
+    let htmlContent: String?
     let excerpt: String?
     let author: ZhihuAuthor?
     let voteupCount: Int?
@@ -319,6 +320,7 @@ struct ZhihuArticleDetail: Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, title, content, excerpt, author, created, updated
+        case htmlContent = "html_content"
         case voteupCount = "voteup_count"
         case commentCount = "comment_count"
     }
@@ -334,6 +336,7 @@ struct ZhihuArticleDetail: Codable {
         }
         self.title = try container.decodeIfPresent(String.self, forKey: .title)
         self.content = try container.decodeIfPresent(String.self, forKey: .content)
+        self.htmlContent = try container.decodeIfPresent(String.self, forKey: .htmlContent)
         self.excerpt = try container.decodeIfPresent(String.self, forKey: .excerpt)
         self.author = try container.decodeIfPresent(ZhihuAuthor.self, forKey: .author)
         self.voteupCount = try container.decodeIfPresent(Int.self, forKey: .voteupCount)
@@ -347,6 +350,7 @@ struct ZhihuArticleDetail: Codable {
 struct ZhihuAnswerDetail: Codable {
     let id: Int?
     let content: String?
+    let htmlContent: String?
     let excerpt: String?
     let author: ZhihuAuthor?
     let question: ZhihuQuestion?
@@ -358,6 +362,7 @@ struct ZhihuAnswerDetail: Codable {
 
     enum CodingKeys: String, CodingKey {
         case id, content, excerpt, author, question
+        case htmlContent = "html_content"
         case voteupCount = "voteup_count"
         case commentCount = "comment_count"
         case thanksCount = "thanks_count"
@@ -375,6 +380,7 @@ struct ZhihuAnswerDetail: Codable {
             self.id = nil
         }
         self.content = try container.decodeIfPresent(String.self, forKey: .content)
+        self.htmlContent = try container.decodeIfPresent(String.self, forKey: .htmlContent)
         self.excerpt = try container.decodeIfPresent(String.self, forKey: .excerpt)
         self.author = try container.decodeIfPresent(ZhihuAuthor.self, forKey: .author)
         self.question = try container.decodeIfPresent(ZhihuQuestion.self, forKey: .question)
@@ -515,11 +521,16 @@ class ZhihuService: ForumService {
     // Downvoted item IDs (persisted via DatabaseManager)
     private var downvotedIds: Set<String> = []
 
+    // Filtered (read/not-interested) post IDs for recommends
+    private var filteredPostIds: Set<String> = []
+
     // Session restore flag
     private var sessionRestored = false
 
     init() {
         loadDownvotedIds()
+        loadFilteredPostIds()
+        cleanupExpiredFilteredPosts()
     }
 
     // MARK: - Session Restore
@@ -573,7 +584,7 @@ class ZhihuService: ForumService {
         return request
     }
 
-    // MARK: - Downvote Management
+    // MARK: - Downvote & Filtered Post Management
 
     private func loadDownvotedIds() {
         if let saved = DatabaseManager.shared.getSetting(key: "zhihu_downvoted_ids") {
@@ -587,14 +598,26 @@ class ZhihuService: ForumService {
         DatabaseManager.shared.saveSetting(key: "zhihu_downvoted_ids", value: value)
     }
 
-    /// Downvote a feed item — marks it locally and sends uninterest request to Zhihu
+    private func loadFilteredPostIds() {
+        let ids = DatabaseManager.shared.getFilteredPostIds(serviceId: id)
+        filteredPostIds = Set(ids)
+        print("[Zhihu] Loaded \(filteredPostIds.count) filtered post IDs from database")
+    }
+
+    private func cleanupExpiredFilteredPosts() {
+        DatabaseManager.shared.cleanupOldFilteredPosts(serviceId: id)
+    }
+
+    /// Downvote a feed item — marks it locally, sends uninterest request to Zhihu, and adds to filtered list
     func downvoteItem(feedItem: ZhihuFeedItem) async {
         guard let targetId = feedItem.target?.id else { return }
         let idStr = String(targetId)
 
         // Add to local blacklist
         downvotedIds.insert(idStr)
+        filteredPostIds.insert(idStr)
         saveDownvotedIds()
+        DatabaseManager.shared.addFilteredPost(postId: idStr, serviceId: id)
         print("[Zhihu] Downvoted item: \(idStr)")
 
         // Send uninterest request to Zhihu API
@@ -613,6 +636,19 @@ class ZhihuService: ForumService {
     func isDownvoted(targetId: Int?) -> Bool {
         guard let id = targetId else { return false }
         return downvotedIds.contains(String(id))
+    }
+
+    /// Mark a post as read
+    func markPostAsRead(threadId: String) {
+        let parts = threadId.components(separatedBy: "_")
+        guard parts.count == 2 else { return }
+        let postId = parts[1]
+        
+        if !filteredPostIds.contains(postId) {
+            filteredPostIds.insert(postId)
+            DatabaseManager.shared.addFilteredPost(postId: postId, serviceId: id)
+            print("[Zhihu] Marked post as read: \(postId)")
+        }
     }
 
     /// Send uninterest signal to Zhihu's server
@@ -876,23 +912,55 @@ class ZhihuService: ForumService {
     // MARK: - Content Detail
 
     private func fetchAnswerDetail(answerId: String, page: Int) async throws -> (Thread, [Comment], Int?) {
-        let urlStr = "\(answerDetailBase)/\(answerId)?include=content,paid_info,can_comment,excerpt,thanks_count,voteup_count,comment_count,visited_count"
+        let urlStr = "\(answerDetailBase)/\(answerId)?include=content,html_content,paid_info,can_comment,excerpt,thanks_count,voteup_count,comment_count,visited_count,author"
         guard let url = URL(string: urlStr) else {
             throw NSError(domain: "ZhihuService", code: -1)
         }
 
         print("[Zhihu] Fetching answer detail: \(answerId)")
-        let request = buildRequest(url: url)
-        let (data, _) = try await URLSession.shared.data(for: request)
+        var answer: ZhihuAnswerDetail?
+        var contentText = ""
+        var attempts = 0
+        let maxAttempts = 3
 
-        let decoder = JSONDecoder()
-        let answer = try decoder.decode(ZhihuAnswerDetail.self, from: data)
+        // Retry up to 3 times if content is empty
+        while attempts < maxAttempts {
+            attempts += 1
+            print("[Zhihu] Answer detail fetch attempt \(attempts)/\(maxAttempts)")
+            
+            let request = buildRequest(url: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
+
+            let decoder = JSONDecoder()
+            let fetchedAnswer = try decoder.decode(ZhihuAnswerDetail.self, from: data)
+            answer = fetchedAnswer
+
+            // Prefer content > html_content > excerpt
+            contentText = fetchedAnswer.content ?? fetchedAnswer.htmlContent ?? fetchedAnswer.excerpt ?? ""
+            
+            if !contentText.isEmpty {
+                print("[Zhihu] Successfully fetched content on attempt \(attempts)")
+                break
+            } else if attempts < maxAttempts {
+                print("[Zhihu] Empty content on attempt \(attempts), retrying...")
+                // Small delay before retry to avoid rate limiting
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            }
+        }
+
+        guard let answer = answer else {
+            throw NSError(domain: "ZhihuService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch answer"])
+        }
+
+        if contentText.isEmpty {
+            print("[Zhihu] WARNING: Empty content for answer \(answerId) after \(maxAttempts) attempts - content: \(answer.content == nil ? "nil" : "empty"), html_content: \(answer.htmlContent == nil ? "nil" : "empty"), excerpt: \(answer.excerpt == nil ? "nil" : "empty")")
+        }
 
         // Create Thread from answer detail
         let thread = Thread(
             id: "answer_\(answerId)",
             title: answer.question?.title ?? "回答",
-            content: cleanHTML(answer.content ?? answer.excerpt ?? ""),
+            content: cleanHTML(contentText),
             author: User(
                 id: answer.author?.id ?? "",
                 username: answer.author?.name ?? "匿名用户",
@@ -913,22 +981,54 @@ class ZhihuService: ForumService {
     }
 
     private func fetchArticleDetail(articleId: String, page: Int) async throws -> (Thread, [Comment], Int?) {
-        let urlStr = "\(articleDetailBase)/\(articleId)?include=content,paid_info,can_comment,excerpt,thanks_count,voteup_count,comment_count,visited_count"
+        let urlStr = "\(articleDetailBase)/\(articleId)?include=content,html_content,paid_info,can_comment,excerpt,thanks_count,voteup_count,comment_count,visited_count,author"
         guard let url = URL(string: urlStr) else {
             throw NSError(domain: "ZhihuService", code: -1)
         }
 
         print("[Zhihu] Fetching article detail: \(articleId)")
-        let request = buildRequest(url: url)
-        let (data, _) = try await URLSession.shared.data(for: request)
+        var article: ZhihuArticleDetail?
+        var contentText = ""
+        var attempts = 0
+        let maxAttempts = 3
 
-        let decoder = JSONDecoder()
-        let article = try decoder.decode(ZhihuArticleDetail.self, from: data)
+        // Retry up to 3 times if content is empty
+        while attempts < maxAttempts {
+            attempts += 1
+            print("[Zhihu] Article detail fetch attempt \(attempts)/\(maxAttempts)")
+            
+            let request = buildRequest(url: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
+
+            let decoder = JSONDecoder()
+            let fetchedArticle = try decoder.decode(ZhihuArticleDetail.self, from: data)
+            article = fetchedArticle
+
+            // Prefer content > html_content > excerpt
+            contentText = fetchedArticle.content ?? fetchedArticle.htmlContent ?? fetchedArticle.excerpt ?? ""
+            
+            if !contentText.isEmpty {
+                print("[Zhihu] Successfully fetched content on attempt \(attempts)")
+                break
+            } else if attempts < maxAttempts {
+                print("[Zhihu] Empty content on attempt \(attempts), retrying...")
+                // Small delay before retry to avoid rate limiting
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+            }
+        }
+
+        guard let article = article else {
+            throw NSError(domain: "ZhihuService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch article"])
+        }
+
+        if contentText.isEmpty {
+            print("[Zhihu] WARNING: Empty content for article \(articleId) after \(maxAttempts) attempts - content: \(article.content == nil ? "nil" : "empty"), html_content: \(article.htmlContent == nil ? "nil" : "empty"), excerpt: \(article.excerpt == nil ? "nil" : "empty")")
+        }
 
         let thread = Thread(
             id: "article_\(articleId)",
             title: article.title ?? "文章",
-            content: cleanHTML(article.content ?? article.excerpt ?? ""),
+            content: cleanHTML(contentText),
             author: User(
                 id: article.author?.id ?? "",
                 username: article.author?.name ?? "匿名用户",
@@ -1128,6 +1228,12 @@ class ZhihuService: ForumService {
             // Skip downvoted items
             if isDownvoted(targetId: target.id) {
                 print("[Zhihu] Excluded downvoted item: \(target.id ?? 0)")
+                return nil
+            }
+
+            // Skip read/not-interested posts
+            if let targetId = target.id, filteredPostIds.contains(String(targetId)) {
+                print("[Zhihu] Excluded filtered post: \(targetId)")
                 return nil
             }
 

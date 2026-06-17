@@ -18,7 +18,7 @@ enum FeedflowIcon {
     static let home = "house.fill"
     static let importFile = "tray.and.arrow.down.fill"
     static let link = "link.circle.fill"
-    static let login = "person.crop.circle.fill"
+    static let login = "person.fill"
     static let more = "ellipsis.circle.fill"
     static let refresh = "arrow.triangle.2.circlepath"
     static let settings = "slider.horizontal.3"

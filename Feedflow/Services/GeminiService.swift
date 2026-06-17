@@ -24,10 +24,16 @@ class GeminiService {
         guard let model = model else {
              return "Please set your Gemini API Key in Settings (top left icon on home page)."
         }
+
+        let currentLanguage = LocalizationManager.shared.currentLanguage
+        let outputLanguageInstruction = currentLanguage == "zh"
+            ? "Respond in Simplified Chinese."
+            : "Respond in English."
         
         let prompt = """
         You are a helpful assistant. Please summarize the following forum discussion clearly and concisely.
         Identify the main topic, key arguments or points made, and the general sentiment if applicable.
+        \(outputLanguageInstruction)
         
         Content:
         \(content.prefix(10000)) // Limit length to avoid token limits if necessary

@@ -106,8 +106,8 @@ class RSSParser: NSObject, XMLParserDelegate {
             inItem = false
             
             // Post-processing
-            let title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-            let content = currentContent.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines).decodingHTMLEntities()
+            let content = currentContent.trimmingCharacters(in: .whitespacesAndNewlines).decodingHTMLEntities()
             let authorName = currentAuthor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Author" : currentAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
             let link = currentLink.trimmingCharacters(in: .whitespacesAndNewlines)
             

@@ -260,19 +260,23 @@ struct WebLoginSheetView: View {
             .navigationTitle(config.site.makeService().name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button((isLoggedIn ? "done" : "cancel").localized()) { dismiss() }
-                        .foregroundColor(.forumAccent)
-                }
+                ToolbarItem(placement: .bottomBar) {
+                    HStack {
+                        Button((isLoggedIn ? "done" : "cancel").localized()) { dismiss() }
+                            .foregroundColor(.forumAccent)
 
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("save_session".localized()) {
-                        saveCurrentSession()
+                        Spacer()
+
+                        Button("save_session".localized()) {
+                            saveCurrentSession()
+                        }
+                        .foregroundColor(.forumAccent)
+                        .disabled(isLoggedIn)
                     }
-                    .foregroundColor(.forumAccent)
-                    .disabled(isLoggedIn)
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
         }
     }
 

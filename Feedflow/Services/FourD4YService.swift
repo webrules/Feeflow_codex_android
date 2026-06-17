@@ -84,7 +84,8 @@ class FourD4YService: ForumService {
                 return true
             }
             clearSystemCookies(forDomain: "4d4y.com")
-            print("[4D4Y] Saved cookies did not validate as an authenticated session; checking WKWebView cookies")
+            DatabaseManager.shared.clearCookies(siteId: id)
+            print("[4D4Y] Saved cookies did not validate as an authenticated session; cleared stale cookies, checking WKWebView")
         }
 
         let webCookies = fourD4YCookies(from: await webKitCookies(for: "4d4y.com"))
@@ -124,6 +125,7 @@ class FourD4YService: ForumService {
         let now = Date()
         let host = url.host?.lowercased() ?? ""
         let path = url.path.isEmpty ? "/" : url.path
+        let allCookies = cookies
         let matchingCookies = cookies
             .filter { cookie in
                 if let expires = cookie.expiresDate, expires < now { return false }
@@ -132,6 +134,18 @@ class FourD4YService: ForumService {
                 let pathMatches = path.hasPrefix(cookie.path)
                 return hostMatches && pathMatches
             }
+        // DEBUG: log which cookies were filtered out and why
+        let matchedNames = Set(matchingCookies.map { $0.name })
+        for cookie in allCookies {
+            if !matchedNames.contains(cookie.name) {
+                let cookieDomain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                let hostMatches = host == cookieDomain || host.hasSuffix(".\(cookieDomain)")
+                let pathMatches = path.hasPrefix(cookie.path)
+                let expired = cookie.expiresDate.map { $0 < now } ?? false
+                print("[4D4Y DEBUG] Cookie REJECTED: \(cookie.name) domain=\(cookie.domain) path=\(cookie.path) host=\(host) hostMatch=\(hostMatches) pathMatch=\(pathMatches) expired=\(expired)")
+            }
+        }
+        print("[4D4Y DEBUG] Cookie header for \(host)\(path): sending \(matchedNames.count)/\(allCookies.count) cookies: \(matchedNames.sorted().joined(separator: ", "))")
 
         var bestCookieByName: [String: HTTPCookie] = [:]
         for cookie in matchingCookies {
@@ -222,10 +236,17 @@ class FourD4YService: ForumService {
             let pattern = "href=\"forumdisplay\\.php\\?fid=(\\d+)[^\"]*\"[^>]*>([^<]+)</a>"
             let regex = try NSRegularExpression(pattern: pattern, options: .caseInsensitive)
             let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
-            let isLoggedIn = !matches.isEmpty
+            // Real auth check: a logged-in user sees "退出" (logout), guest sees "登录" (login)
+            let hasLogoutLink = html.contains("action=logout") || html.contains("退出")
+            let hasLoginLink = html.contains("action=login") && !html.contains("action=logout")
+            let isLoggedIn = !matches.isEmpty && hasLogoutLink && !hasLoginLink
 
             if isLoggedIn {
-                print("[4D4Y] Session validation succeeded: forums=\(matches.count)")
+                let forumNames = matches.compactMap { match -> String? in
+                    guard let r = Range(match.range(at: 2), in: html) else { return nil }
+                    return String(html[r])
+                }
+                print("[4D4Y DEBUG] Session validation succeeded: forums=\(matches.count) (logout link ✓) → \(forumNames.joined(separator: ", "))")
                 // Extract SID/formHash from the validation response so the service
                 // instance is fully initialized for subsequent requests (e.g. posting).
                 extractSID(from: html)
@@ -250,8 +271,10 @@ class FourD4YService: ForumService {
         let savedCookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
         let relevant = fourD4YCookies(from: savedCookies)
 
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.httpShouldHandleCookies = false
 
         // Manually set cookies in the request header to guarantee they're sent
@@ -272,8 +295,34 @@ class FourD4YService: ForumService {
             html = String(decoding: data, as: UTF8.self)
         }
 
-        // Always try to extract SID/FormHash from every response to keep them "latest"
-        extractSID(from: html)
+        // Only extract SID/FormHash from logged-in pages to avoid poisoning
+        // currentSID with guest/challenge SIDs.
+        let isLoggedInPage = html.contains("action=logout") || html.contains("退出")
+        if isLoggedInPage {
+            extractSID(from: html)
+        }
+
+        // DEBUG: Log login state indicators from the response HTML
+        if url.absoluteString.contains("index.php") || url.absoluteString.contains("forumdisplay.php") {
+            let loginIndicators = ["logout", "welcome", "member", "guest", "logginfo", "会员", "游客", "退出", "登录", "注册"]
+            for keyword in loginIndicators {
+                if let range = html.range(of: keyword, options: .caseInsensitive) {
+                    let start = html.index(range.lowerBound, offsetBy: -50, limitedBy: html.startIndex) ?? html.startIndex
+                    let end = html.index(range.upperBound, offsetBy: 50, limitedBy: html.endIndex) ?? html.endIndex
+                    let snippet = String(html[start..<end]).replacingOccurrences(of: "\n", with: " ")
+                    print("[4D4Y DEBUG] \(url.lastPathComponent): found '\(keyword)' → \(snippet)")
+                }
+            }
+            // Log visible forum links
+            if let fRegex = try? NSRegularExpression(pattern: "forumdisplay\\.php\\?fid=(\\d+)[^\">]*\">([^<]+)</a>", options: .caseInsensitive) {
+                let matches = fRegex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+                let names = matches.compactMap { m -> String? in
+                    guard let r = Range(m.range(at: 2), in: html) else { return nil }
+                    return String(html[r])
+                }
+                print("[4D4Y DEBUG] \(url.lastPathComponent): visible forums (\(matches.count)): \(names.joined(separator: ", "))")
+            }
+        }
 
         return html
     }
@@ -302,15 +351,38 @@ class FourD4YService: ForumService {
         }
 
         // 2. Extract FormHash
-        if let regex = try? NSRegularExpression(pattern: "formhash=([a-zA-Z0-9]+)", options: []) {
+        if let formHash = extractFormHash(from: html) {
+            self.currentFormHash = formHash
+            print("[4D4Y] Extracted FormHash: \(formHash)")
+        }
+    }
+
+    private func extractFormHash(from html: String) -> String? {
+        let patterns = [
+            // URL/query style: ...formhash=abcdef12...
+            "formhash=([a-zA-Z0-9]+)",
+            // Hidden input styles with flexible attribute order and quotes
+            "name=['\"]formhash['\"][^>]*value=['\"]([a-zA-Z0-9]+)['\"]",
+            "value=['\"]([a-zA-Z0-9]+)['\"][^>]*name=['\"]formhash['\"]",
+            // JS assignments found on some Discuz templates
+            "(?:var\\s+)?formhash\\s*[:=]\\s*['\"]([a-zA-Z0-9]+)['\"]"
+        ]
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+                continue
+            }
             let range = NSRange(html.startIndex..., in: html)
-            if let match = regex.firstMatch(in: html, options: [], range: range) {
-                if let r = Range(match.range(at: 1), in: html) {
-                    self.currentFormHash = String(html[r])
-                    print("[4D4Y] Extracted FormHash: \(self.currentFormHash!)")
+            if let match = regex.firstMatch(in: html, options: [], range: range),
+               let hashRange = Range(match.range(at: 1), in: html) {
+                let candidate = String(html[hashRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty {
+                    return candidate
                 }
             }
         }
+
+        return nil
     }
 
     func fetchCategories() async throws -> [Community] {
@@ -380,11 +452,13 @@ class FourD4YService: ForumService {
              _ = try await fetchCategories()
         }
 
-        let sidParam = hasAuthCookie(loadSavedCookies()) ? "" : (currentSID.map { "&sid=\($0)" } ?? "")
+        // Always carry SID when available — Discuz 7.2 requires it even with auth cookies
+        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
         // Add page param
         let pageParam = page > 1 ? "&page=\(page)" : ""
+        let cacheBuster = "&_t=\(Int(Date().timeIntervalSince1970))"
 
-        let url = URL(string: "\(baseURL)/forumdisplay.php?fid=\(categoryId)\(sidParam)\(pageParam)")!
+        let url = URL(string: "\(baseURL)/forumdisplay.php?fid=\(categoryId)\(sidParam)\(pageParam)\(cacheBuster)")!
         let html = try await fetchContent(url: url)
 
         var threads: [Thread] = []
@@ -413,7 +487,7 @@ class FourD4YService: ForumService {
             if let titleRegex = try? NSRegularExpression(pattern: "href=\"viewthread\\.php\\?tid=\\d+[^\"]*\"[^>]*>([^<]+)</a>", options: .caseInsensitive),
                let titleMatch = titleRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
                let titleTextRange = Range(titleMatch.range(at: 1), in: rowContent) {
-                title = String(rowContent[titleTextRange])
+                title = String(rowContent[titleTextRange]).decodingHTMLEntities()
             }
 
             // Extract author from <td class="author"><a>authorname</a> within this row
@@ -519,7 +593,8 @@ class FourD4YService: ForumService {
     }
 
     private func fetchThreadDetailInternal(threadId: String, page: Int, retryCount: Int) async throws -> (Thread, [Comment], Int?) {
-         let sidParam = hasAuthCookie(loadSavedCookies()) ? "" : (currentSID.map { "&sid=\($0)" } ?? "")
+         // Always carry SID when available — Discuz 7.2 requires it even with auth cookies
+        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
          // Need to handle both standard page param and 'extra' param if relevant, but typically &page=2 works for viewthread.php
          let pageParam = page > 1 ? "&page=\(page)&extra=page%3D1" : ""
 
@@ -561,13 +636,13 @@ class FourD4YService: ForumService {
              print("[4D4Y] Extracted Topic FID: \(currentFid)")
          }
 
-         // 1. Extract Title
+         // 1. Extract Title (with HTML entity decode)
          // <title>Title - ...</title> or <h1>
          var title = "Unknown Topic"
          if let titleRegex = try? NSRegularExpression(pattern: "<title>(.*?)(?: - |<)", options: .caseInsensitive),
             let match = titleRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
             let r = Range(match.range(at: 1), in: html) {
-             title = String(html[r])
+             title = String(html[r]).decodingHTMLEntities()
          }
 
          // 2. Extract Threads/Comments
@@ -870,7 +945,7 @@ class FourD4YService: ForumService {
 
         // 1. Ensure we have a formhash
         if currentFormHash == nil {
-            _ = try await fetchThreadDetail(threadId: topicId, page: 1)
+            try await ensureFormHashForReply(topicId: topicId, categoryId: categoryId)
         }
 
         guard let formhash = currentFormHash else {
@@ -947,6 +1022,26 @@ class FourD4YService: ForumService {
                 print("[4D4Y] Reply FAILED: \(errorMessage)")
                 throw NSError(domain: "4D4Y", code: 403, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
+        }
+    }
+
+    private func ensureFormHashForReply(topicId: String, categoryId: String) async throws {
+        if currentFormHash != nil {
+            return
+        }
+
+        let sidParam = currentSID.map { "&sid=\($0)" } ?? ""
+        let threadURL = URL(string: "\(baseURL)/viewthread.php?tid=\(topicId)\(sidParam)")!
+        _ = try await fetchContent(url: threadURL)
+
+        if currentFormHash == nil {
+            let indexURL = URL(string: "\(baseURL)/index.php")!
+            _ = try await fetchContent(url: indexURL)
+        }
+
+        if currentFormHash == nil {
+            let replyFormURL = URL(string: "\(baseURL)/post.php?action=reply&fid=\(categoryId)&tid=\(topicId)\(sidParam)")!
+            _ = try await fetchContent(url: replyFormURL)
         }
     }
 

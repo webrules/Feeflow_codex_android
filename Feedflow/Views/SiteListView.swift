@@ -133,13 +133,15 @@ struct CommunityConfigView: View {
             .navigationTitle("communities".localized())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .bottomBar) {
                     Button("done".localized()) {
                         dismiss()
                     }
                     .foregroundColor(.forumAccent)
                 }
             }
+            .toolbarBackground(Color.forumBackground, for: .bottomBar)
+            .toolbarBackground(.visible, for: .bottomBar)
         }
     }
 }
@@ -155,16 +157,13 @@ struct SiteListView: View {
     @State private var showLogin: Bool = false
     @State private var showBookmarks: Bool = false
     @State private var showCommunityConfig: Bool = false
+    @State private var showCrossSiteSummary: Bool = false
 
     var body: some View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
 
             VStack(spacing: 24) {
-                homeToolbar
-                    .padding(.horizontal)
-                    .padding(.top, 12)
-
                 Text("select_community".localized())
                     .font(.title2)
                     .bold()
@@ -209,6 +208,16 @@ struct SiteListView: View {
             .sheet(isPresented: $showCommunityConfig) {
                 CommunityConfigView()
             }
+            .sheet(isPresented: $showCrossSiteSummary) {
+                CrossSiteAISummaryView()
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            homeToolbar
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+                .background(Color.forumBackground)
         }
     }
 
@@ -216,7 +225,7 @@ struct SiteListView: View {
         HStack(spacing: 12) {
             HStack(spacing: 14) {
                 Button(action: { showLogin = true }) {
-                    FeedflowSymbol(name: FeedflowIcon.login, size: 18, color: .forumTextPrimary)
+                    FeedflowSymbol(name: FeedflowIcon.login, size: 22, color: .forumTextPrimary)
                 }
 
                 Button(action: { showSettings = true }) {
@@ -225,6 +234,10 @@ struct SiteListView: View {
 
                 Button(action: { showBookmarks = true }) {
                     FeedflowSymbol(name: FeedflowIcon.bookmarkFill, size: 18, color: .forumTextPrimary)
+                }
+
+                Button(action: { showCrossSiteSummary = true }) {
+                    FeedflowSymbol(name: FeedflowIcon.ai, size: 18, color: .forumTextPrimary)
                 }
             }
 
