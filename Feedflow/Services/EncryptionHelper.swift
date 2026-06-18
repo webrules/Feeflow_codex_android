@@ -70,7 +70,7 @@ class EncryptionHelper {
         
         let status = SecItemAdd(addQuery as CFDictionary, nil)
         if status != errSecSuccess {
-            print("[EncryptionHelper] Warning: Failed to save key to Keychain (status: \(status))")
+            AppLogger.debug("[EncryptionHelper] Warning: Failed to save key to Keychain (status: \(status))")
         }
     }
     
@@ -82,7 +82,7 @@ class EncryptionHelper {
             let sealedBox = try AES.GCM.seal(data, using: encryptionKey)
             return sealedBox.combined?.base64EncodedString()
         } catch {
-            print("[EncryptionHelper] Encryption error: \(error)")
+            AppLogger.debug("[EncryptionHelper] Encryption error: \(error)")
             return nil
         }
     }
@@ -99,11 +99,11 @@ class EncryptionHelper {
         
         // Fallback: try legacy hardcoded key (migrates on next encrypt)
         if let result = decryptWith(data: data, key: EncryptionHelper.legacyKey) {
-            print("[EncryptionHelper] Decrypted with legacy key — data will be re-encrypted on next save")
+            AppLogger.debug("[EncryptionHelper] Decrypted with legacy key — data will be re-encrypted on next save")
             return result
         }
         
-        print("[EncryptionHelper] Decryption failed with both current and legacy keys")
+        AppLogger.debug("[EncryptionHelper] Decryption failed with both current and legacy keys")
         return nil
     }
     

@@ -79,26 +79,26 @@ class FourD4YService: ForumService {
         let savedCookies = fourD4YCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
 
         if !savedCookies.isEmpty {
-            if hasAuthCookie(savedCookies), await validateSession(cookies: savedCookies) {
+            if await validateSession(cookies: savedCookies) {
                 syncCookies(savedCookies)
                 return true
             }
             clearSystemCookies(forDomain: "4d4y.com")
             DatabaseManager.shared.clearCookies(siteId: id)
-            print("[4D4Y] Saved cookies did not validate as an authenticated session; cleared stale cookies, checking WKWebView")
+            AppLogger.debug("[4D4Y] Saved cookies did not validate as an authenticated session; cleared stale cookies, checking WKWebView")
         }
 
         let webCookies = fourD4YCookies(from: await webKitCookies(for: "4d4y.com"))
         if !webCookies.isEmpty {
-            print("[4D4Y] Checking \(webCookies.count) 4d4y cookies from WKWebView")
+            AppLogger.debug("[4D4Y] Checking \(webCookies.count) 4d4y cookies from WKWebView")
 
-            if hasAuthCookie(webCookies), await validateSession(cookies: webCookies) {
+            if await validateSession(cookies: webCookies) {
                 DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
                 syncCookies(webCookies)
                 return true
             }
 
-            print("[4D4Y] WKWebView cookies were not authenticated; keeping stored cookies unchanged")
+            AppLogger.debug("[4D4Y] WKWebView cookies were not authenticated; keeping stored cookies unchanged")
         }
 
         // No cookies — attempt auto-login with saved credentials
@@ -114,13 +114,6 @@ class FourD4YService: ForumService {
         cookies.filter { $0.domain.contains("4d4y.com") }
     }
 
-    private func hasAuthCookie(_ cookies: [HTTPCookie]) -> Bool {
-        cookies.contains { cookie in
-            let name = cookie.name.lowercased()
-            return name.contains("auth") || name.contains("login") || name.contains("member")
-        }
-    }
-
     private func cookieHeader(for url: URL, cookies: [HTTPCookie]) -> String? {
         let now = Date()
         let host = url.host?.lowercased() ?? ""
@@ -134,7 +127,7 @@ class FourD4YService: ForumService {
                 let pathMatches = path.hasPrefix(cookie.path)
                 return hostMatches && pathMatches
             }
-        // DEBUG: log which cookies were filtered out and why
+        // DEBUG: log matching counts without exposing cookie names or values.
         let matchedNames = Set(matchingCookies.map { $0.name })
         for cookie in allCookies {
             if !matchedNames.contains(cookie.name) {
@@ -142,10 +135,10 @@ class FourD4YService: ForumService {
                 let hostMatches = host == cookieDomain || host.hasSuffix(".\(cookieDomain)")
                 let pathMatches = path.hasPrefix(cookie.path)
                 let expired = cookie.expiresDate.map { $0 < now } ?? false
-                print("[4D4Y DEBUG] Cookie REJECTED: \(cookie.name) domain=\(cookie.domain) path=\(cookie.path) host=\(host) hostMatch=\(hostMatches) pathMatch=\(pathMatches) expired=\(expired)")
+                AppLogger.debug("[4D4Y DEBUG] Cookie rejected: domain=\(cookie.domain) path=\(cookie.path) host=\(host) hostMatch=\(hostMatches) pathMatch=\(pathMatches) expired=\(expired)")
             }
         }
-        print("[4D4Y DEBUG] Cookie header for \(host)\(path): sending \(matchedNames.count)/\(allCookies.count) cookies: \(matchedNames.sorted().joined(separator: ", "))")
+        AppLogger.debug("[4D4Y DEBUG] Cookie header for \(host)\(path): sending \(matchedNames.count)/\(allCookies.count) cookies")
 
         var bestCookieByName: [String: HTTPCookie] = [:]
         for cookie in matchingCookies {
@@ -210,10 +203,10 @@ class FourD4YService: ForumService {
         // Only sync cookies that actually belong to 4d4y domain
         let relevant = saved.filter { $0.domain.contains("4d4y.com") }
         if relevant.isEmpty {
-            print("[4D4Y] WARNING: No 4d4y cookies found in DB for site '\(id)'. User may not be logged in.")
+            AppLogger.debug("[4D4Y] WARNING: No 4d4y cookies found in DB for site '\(id)'. User may not be logged in.")
         } else {
             let names = relevant.map { "\($0.name)(\($0.domain))" }.joined(separator: ", ")
-            print("[4D4Y] Syncing \(relevant.count) cookies to system: \(names)")
+            AppLogger.debug("[4D4Y] Syncing \(relevant.count) cookies to system: \(names)")
         }
         syncCookies(relevant)
     }
@@ -246,17 +239,17 @@ class FourD4YService: ForumService {
                     guard let r = Range(match.range(at: 2), in: html) else { return nil }
                     return String(html[r])
                 }
-                print("[4D4Y DEBUG] Session validation succeeded: forums=\(matches.count) (logout link ✓) → \(forumNames.joined(separator: ", "))")
+                AppLogger.debug("[4D4Y DEBUG] Session validation succeeded: forums=\(matches.count) (logout link ✓) → \(forumNames.joined(separator: ", "))")
                 // Extract SID/formHash from the validation response so the service
                 // instance is fully initialized for subsequent requests (e.g. posting).
                 extractSID(from: html)
             } else {
-                print("[4D4Y] Session validation failed: no forumdisplay links found")
+                AppLogger.debug("[4D4Y] Session validation failed: no forumdisplay links found")
             }
 
             return isLoggedIn
         } catch {
-            print("[4D4Y] Session validation error: \(error)")
+            AppLogger.debug("[4D4Y] Session validation error: \(error)")
             return false
         }
     }
@@ -281,7 +274,7 @@ class FourD4YService: ForumService {
         // (HTTPCookieStorage automatic handling can silently drop cookies)
         if let cookieHeader = cookieHeader(for: url, cookies: relevant) {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            print("[4D4Y] Sending \(relevant.count) cookies manually: \(relevant.map { $0.name }.joined(separator: ", "))")
+            AppLogger.debug("[4D4Y] Sending \(relevant.count) cookies manually")
         }
 
         let (data, _) = try await URLSession.shared.data(for: request)
@@ -310,7 +303,7 @@ class FourD4YService: ForumService {
                     let start = html.index(range.lowerBound, offsetBy: -50, limitedBy: html.startIndex) ?? html.startIndex
                     let end = html.index(range.upperBound, offsetBy: 50, limitedBy: html.endIndex) ?? html.endIndex
                     let snippet = String(html[start..<end]).replacingOccurrences(of: "\n", with: " ")
-                    print("[4D4Y DEBUG] \(url.lastPathComponent): found '\(keyword)' → \(snippet)")
+                    AppLogger.debug("[4D4Y DEBUG] \(url.lastPathComponent): found '\(keyword)' → \(snippet)")
                 }
             }
             // Log visible forum links
@@ -320,7 +313,7 @@ class FourD4YService: ForumService {
                     guard let r = Range(m.range(at: 2), in: html) else { return nil }
                     return String(html[r])
                 }
-                print("[4D4Y DEBUG] \(url.lastPathComponent): visible forums (\(matches.count)): \(names.joined(separator: ", "))")
+                AppLogger.debug("[4D4Y DEBUG] \(url.lastPathComponent): visible forums (\(matches.count)): \(names.joined(separator: ", "))")
             }
         }
 
@@ -334,7 +327,7 @@ class FourD4YService: ForumService {
             if let match = regex.firstMatch(in: html, options: [], range: range) {
                 if let r = Range(match.range(at: 1), in: html) {
                     self.currentSID = String(html[r])
-                    print("[4D4Y] Extracted SID: \(self.currentSID!)")
+                    AppLogger.debug("[4D4Y] Extracted SID: \(self.currentSID!)")
 
                     // Set SID cookie on in-memory session only (don't persist to DB to avoid overwriting login cookies)
                     if let sidCookie = HTTPCookie(properties: [
@@ -353,7 +346,7 @@ class FourD4YService: ForumService {
         // 2. Extract FormHash
         if let formHash = extractFormHash(from: html) {
             self.currentFormHash = formHash
-            print("[4D4Y] Extracted FormHash: \(formHash)")
+            AppLogger.debug("[4D4Y] Extracted FormHash: \(formHash)")
         }
     }
 
@@ -391,9 +384,9 @@ class FourD4YService: ForumService {
 
     private func fetchCategoriesInternal(retryCount: Int) async throws -> [Community] {
         let url = URL(string: "\(baseURL)/index.php")!
-        print("[4D4Y] Fetching index: \(url)")
+        AppLogger.debug("[4D4Y] Fetching index: \(url)")
         let html = try await fetchContent(url: url)
-        print("[4D4Y] Index fetched. Length: \(html.count)")
+        AppLogger.debug("[4D4Y] Index fetched. Length: \(html.count)")
 
         extractSID(from: html)
 
@@ -403,13 +396,13 @@ class FourD4YService: ForumService {
         // Handles: <a href="forumdisplay.php?fid=7" style="">Name</a>
         // Key fix: Allow any attributes after href value before closing >
         let pattern = "href=\"forumdisplay\\.php\\?fid=(\\d+)[^\"]*\"[^>]*>([^<]+)</a>"
-        // print("[4D4Y] Using Regex: \(pattern)")
+        // AppLogger.debug("[4D4Y] Using Regex: \(pattern)")
 
         let regex = try NSRegularExpression(pattern: pattern, options: .caseInsensitive)
         let range = NSRange(html.startIndex..., in: html)
         let matches = regex.matches(in: html, options: [], range: range)
 
-        print("[4D4Y] Found \(matches.count) forum matches")
+        AppLogger.debug("[4D4Y] Found \(matches.count) forum matches")
 
         for match in matches {
             if let fidRange = Range(match.range(at: 1), in: html),
@@ -433,7 +426,7 @@ class FourD4YService: ForumService {
 
         // If results are empty, try auto-login if possible
         if communities.isEmpty && retryCount == 0 {
-            print("[4D4Y] No categories found. Attempting auto-login and retry...")
+            AppLogger.debug("[4D4Y] No categories found. Attempting auto-login and retry...")
             if try await performAutoLogin() {
                 return try await fetchCategoriesInternal(retryCount: 1)
             }
@@ -470,8 +463,8 @@ class FourD4YService: ForumService {
         let threadRowRegex = try NSRegularExpression(pattern: threadRowPattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
         let threadMatches = threadRowRegex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
 
-        print("[4D4Y] Fetching threads from: \(url)")
-        print("[4D4Y] Found \(threadMatches.count) thread rows")
+        AppLogger.debug("[4D4Y] Fetching threads from: \(url)")
+        AppLogger.debug("[4D4Y] Found \(threadMatches.count) thread rows")
 
         for (index, threadMatch) in threadMatches.enumerated() {
             guard let tidRange = Range(threadMatch.range(at: 1), in: html),
@@ -513,7 +506,7 @@ class FourD4YService: ForumService {
 
             // Debug first few
             if index < 3 {
-                print("[4D4Y] Thread \(index): tid=\(tid), title=\(title), author=\(authorName), replies=\(replyCount)")
+                AppLogger.debug("[4D4Y] Thread \(index): tid=\(tid), title=\(title), author=\(authorName), replies=\(replyCount)")
             }
 
             // Add thread
@@ -532,11 +525,11 @@ class FourD4YService: ForumService {
                 ))
             }
         }
-        print("[4D4Y] Returning \(threads.count) unique threads")
+        AppLogger.debug("[4D4Y] Returning \(threads.count) unique threads")
 
         // If results are empty and it's the first page, try auto-login if possible
         if threads.isEmpty && page == 1 && retryCount == 0 {
-            print("[4D4Y] No threads found. Attempting auto-login and retry...")
+            AppLogger.debug("[4D4Y] No threads found. Attempting auto-login and retry...")
             if try await performAutoLogin() {
                 // Clear SID to force refresh after login
                 self.currentSID = nil
@@ -548,12 +541,12 @@ class FourD4YService: ForumService {
     }
 
     private func performAutoLogin() async throws -> Bool {
-        print("[4D4Y] Attempting auto-login...")
+        AppLogger.debug("[4D4Y] Attempting auto-login...")
         guard let encryptedUsername = DatabaseManager.shared.getSetting(key: "login_\(id)_username"),
               let encryptedPassword = DatabaseManager.shared.getSetting(key: "login_\(id)_password"),
               let username = EncryptionHelper.shared.decrypt(encryptedUsername),
               let password = EncryptionHelper.shared.decrypt(encryptedPassword) else {
-            print("[4D4Y] No saved credentials found for auto-login.")
+            AppLogger.debug("[4D4Y] No saved credentials found for auto-login.")
             return false
         }
 
@@ -564,17 +557,16 @@ class FourD4YService: ForumService {
             let sessionCookies = uniqueCookies(fourD4YCookies(from: cookies + systemCookies))
 
             if !sessionCookies.isEmpty,
-               hasAuthCookie(sessionCookies),
                await validateSession(cookies: sessionCookies) {
                 DatabaseManager.shared.replaceCookies(siteId: id, cookies: sessionCookies)
                 syncCookies(sessionCookies)
-                print("[4D4Y] Auto-login successful.")
+                AppLogger.debug("[4D4Y] Auto-login successful.")
                 return true
             }
 
-            print("[4D4Y] Auto-login did not produce a validated auth cookie set.")
+            AppLogger.debug("[4D4Y] Auto-login did not produce a validated auth cookie set.")
         } catch {
-            print("[4D4Y] Auto-login failed: \(error)")
+            AppLogger.debug("[4D4Y] Auto-login failed: \(error)")
         }
         return false
     }
@@ -599,7 +591,7 @@ class FourD4YService: ForumService {
          let pageParam = page > 1 ? "&page=\(page)&extra=page%3D1" : ""
 
          let url = URL(string: "\(baseURL)/viewthread.php?tid=\(threadId)\(sidParam)\(pageParam)")!
-         print("[4D4Y] Fetching thread detail: \(url)")
+         AppLogger.debug("[4D4Y] Fetching thread detail: \(url)")
          let html = try await fetchContent(url: url)
 
          // 0. Extract Max Pages
@@ -633,7 +625,7 @@ class FourD4YService: ForumService {
             let match = fidRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
             let range = Range(match.range(at: 1), in: html) {
              currentFid = String(html[range])
-             print("[4D4Y] Extracted Topic FID: \(currentFid)")
+             AppLogger.debug("[4D4Y] Extracted Topic FID: \(currentFid)")
          }
 
          // 1. Extract Title (with HTML entity decode)
@@ -715,7 +707,7 @@ class FourD4YService: ForumService {
              // Fallback if regex failed completely or page is empty
 
              if page == 1 && retryCount == 0 {
-                 print("[4D4Y] No content found in thread detail. Attempting auto-login and retry...")
+                 AppLogger.debug("[4D4Y] No content found in thread detail. Attempting auto-login and retry...")
                  if try await performAutoLogin() {
                      self.currentSID = nil
                      return try await fetchThreadDetailInternal(threadId: threadId, page: page, retryCount: 1)
@@ -924,13 +916,13 @@ class FourD4YService: ForumService {
         } catch {
             let errorString = error.localizedDescription
             if errorString.contains("未登录") || errorString.contains("登录") || errorString.contains("login") || errorString.contains("无权访问") {
-                print("[4D4Y] Auth error detected during reply. Attempting auto-login...")
+                AppLogger.debug("[4D4Y] Auth error detected during reply. Attempting auto-login...")
                 if try await performAutoLogin() {
                     // Reset session identifiers to force fresh ones during retry
                     self.currentSID = nil
                     self.currentFormHash = nil
 
-                    print("[4D4Y] Retrying reply after auto-login...")
+                    AppLogger.debug("[4D4Y] Retrying reply after auto-login...")
                     try await postCommentInternal(topicId: topicId, categoryId: categoryId, content: content)
                     return
                 }
@@ -998,18 +990,18 @@ class FourD4YService: ForumService {
         // but we can manually inject if needed. Given we just called syncCookiesToSystem(),
         // the storage should be current.
 
-        print("[4D4Y] Sending AJAX reply (tid=\(topicId))...")
+        AppLogger.debug("[4D4Y] Sending AJAX reply (tid=\(topicId))...")
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse {
-            print("[4D4Y] Reply response: \(httpResponse.statusCode)")
+            AppLogger.debug("[4D4Y] Reply response: \(httpResponse.statusCode)")
 
             let responseString = String(data: data, encoding: gbkEncoding) ?? String(decoding: data, as: UTF8.self)
 
             if responseString.contains("succeed") || responseString.contains("成功") || responseString.contains("发布") {
-                print("[4D4Y] Reply successful.")
+                AppLogger.debug("[4D4Y] Reply successful.")
             } else {
-                print("[4D4Y] Reply response content: \(responseString)")
+                AppLogger.debug("[4D4Y] Reply response content redacted. Length: \(responseString.count)")
                 var errorMessage = "Unknown error"
                 if let regex = try? NSRegularExpression(pattern: "<!\\[CDATA\\[(.*?)\\]\\]>", options: [.dotMatchesLineSeparators]),
                    let match = regex.firstMatch(in: responseString, options: [], range: NSRange(responseString.startIndex..., in: responseString)),
@@ -1019,7 +1011,7 @@ class FourD4YService: ForumService {
                     errorMessage = "Not logged in or access denied (AJAX error)."
                 }
 
-                print("[4D4Y] Reply FAILED: \(errorMessage)")
+                AppLogger.debug("[4D4Y] Reply FAILED: \(errorMessage)")
                 throw NSError(domain: "4D4Y", code: 403, userInfo: [NSLocalizedDescriptionKey: errorMessage])
             }
         }
@@ -1092,16 +1084,16 @@ class FourD4YService: ForumService {
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
 
-        print("[4D4Y] Creating new thread (fid=\(categoryId))...")
+        AppLogger.debug("[4D4Y] Creating new thread (fid=\(categoryId))...")
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse {
             let responseString = String(data: data, encoding: gbkEncoding) ?? String(decoding: data, as: UTF8.self)
 
             if responseString.contains("succeed") || responseString.contains("成功") {
-                print("[4D4Y] Thread creation successful.")
+                AppLogger.debug("[4D4Y] Thread creation successful.")
             } else {
-                print("[4D4Y] Thread creation FAILED: \(responseString)")
+                AppLogger.debug("[4D4Y] Thread creation failed. Response length: \(responseString.count)")
                 throw NSError(domain: "4D4Y", code: 403, userInfo: [NSLocalizedDescriptionKey: "Failed to create thread."])
             }
         }
@@ -1136,7 +1128,7 @@ class FourD4YService: ForumService {
             let ignoreRegex = try NSRegularExpression(pattern: "<ignore_js_op>.*?</ignore_js_op>", options: [.caseInsensitive, .dotMatchesLineSeparators])
             processed = ignoreRegex.stringByReplacingMatches(in: processed, range: NSRange(processed.startIndex..., in: processed), withTemplate: "")
         } catch {
-            print("Regex error (attachments): \(error)")
+            AppLogger.debug("Regex error (attachments): \(error)")
         }
 
         // 1. Handle Images
@@ -1165,7 +1157,7 @@ class FourD4YService: ForumService {
                 }
             }
         } catch {
-            print("Regex error (images): \(error)")
+            AppLogger.debug("Regex error (images): \(error)")
         }
 
         // 2. Handle line breaks
@@ -1198,7 +1190,7 @@ class FourD4YService: ForumService {
                 }
             }
         } catch {
-            print("Regex error (links): \(error)")
+            AppLogger.debug("Regex error (links): \(error)")
         }
 
         // 3. Strip remaining HTML tags

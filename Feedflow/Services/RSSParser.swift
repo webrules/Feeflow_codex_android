@@ -144,7 +144,7 @@ class RSSParser: NSObject, XMLParserDelegate {
     }
     
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {
-        print("RSS Parse Error: \(parseError)")
+        AppLogger.debug("RSS Parse Error: \(parseError)")
         completion?([])
     }
     

@@ -83,7 +83,7 @@ struct ThreadListView: View {
                         }
                     }
                     .refreshable {
-                        await viewModel.loadTopics(for: community, forceRefresh: true)
+                        await startManualRefresh().value
                     }
                     .coordinateSpace(name: "scroll")
                     .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
@@ -147,7 +147,7 @@ struct ThreadListView: View {
                     }
 
                     ToolbarSymbolButton(name: FeedflowIcon.refresh) {
-                        Task { await viewModel.loadTopics(for: community, isReturning: false, forceRefresh: true) }
+                        startManualRefresh()
                     }
 
                     ToolbarSymbolButton(name: FeedflowIcon.home) {
@@ -162,7 +162,7 @@ struct ThreadListView: View {
             NewThreadView(category: community, service: service)
         }
         .sheet(isPresented: $showLoginSheet, onDismiss: {
-            Task { await viewModel.loadTopics(for: community, isReturning: false, forceRefresh: true) }
+            startManualRefresh()
         }) {
             LoginView(initialSite: ForumSite.from(serviceId: service.id))
         }
@@ -176,6 +176,13 @@ struct ThreadListView: View {
             let isReturning = !isInitialLoad
             await viewModel.loadTopics(for: community, isReturning: isReturning)
             isInitialLoad = false
+        }
+    }
+
+    @discardableResult
+    private func startManualRefresh() -> Task<Void, Never> {
+        Task {
+            await viewModel.loadTopics(for: community, isReturning: false, forceRefresh: true)
         }
     }
 

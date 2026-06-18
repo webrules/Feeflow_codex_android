@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WebKit
 
 // MARK: - Login Configuration per Site
@@ -59,6 +60,21 @@ struct SiteLoginConfig {
             return authCookieNameFragments.contains { normalizedName.contains($0.lowercased()) }
         }
     }
+
+    func isSuccessURL(_ urlString: String) -> Bool {
+        successURLPatterns.contains { pattern in
+            urlString.contains(pattern)
+        }
+    }
+
+    func shouldCheckCookies(for url: URL?) -> Bool {
+        guard let host = url?.host?.lowercased() else {
+            return false
+        }
+
+        let normalizedDomain = cookieDomain.lowercased()
+        return host == normalizedDomain || host.hasSuffix(".\(normalizedDomain)")
+    }
 }
 
 extension SiteLoginConfig {
@@ -114,7 +130,7 @@ extension SiteLoginConfig {
                     .init(name: "Passkey", icon: "person.badge.key.fill", loginPath: "https://linux.do/session/passkey/challenge"),
                 ],
                 cookieDomain: "linux.do",
-                authCookieNameFragments: ["_t"]
+                authCookieNameFragments: ["_t", "remember_user_token"]
             )
 
         case .zhihu:
@@ -145,9 +161,11 @@ struct WebLoginView: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         // Use default data store so OAuth redirects through third-party domains work
         configuration.websiteDataStore = .default()
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .always
 
@@ -164,7 +182,7 @@ struct WebLoginView: UIViewRepresentable {
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    class Coordinator: NSObject, WKNavigationDelegate {
+    class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         let config: SiteLoginConfig
         let onLoginSuccess: ([HTTPCookie]) -> Void
         private var didReportSuccess = false
@@ -176,29 +194,82 @@ struct WebLoginView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard let currentURL = webView.url?.absoluteString else { return }
+            AppLogger.debug("[WebLogin] Finished navigation on \(config.site.makeService().id): \(currentURL)")
 
-            // Check if we've reached a success URL
-            let isSuccess = config.successURLPatterns.contains { pattern in
-                currentURL.contains(pattern)
-            }
+            let isSuccess = config.isSuccessURL(currentURL)
 
             if isSuccess {
-                checkCookiesWithRetry(webView: webView, retries: 5)
-            } else {
-                checkCookiesWithRetry(webView: webView, retries: 0, requireAuthenticatedCookie: true)
+                checkCookiesWithRetry(webView: webView, retries: 8)
+            } else if config.shouldCheckCookies(for: webView.url) {
+                checkCookiesWithRetry(webView: webView, retries: 3)
             }
         }
 
-        func checkCookiesWithRetry(webView: WKWebView, retries: Int, requireAuthenticatedCookie: Bool = false) {
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if let urlString = navigationAction.request.url?.absoluteString {
+                AppLogger.debug("[WebLogin] Navigation requested on \(config.site.makeService().id): \(urlString), newWindow=\(navigationAction.targetFrame == nil)")
+            }
+
+            decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard navigationAction.targetFrame == nil else {
+                return nil
+            }
+
+            AppLogger.debug("[WebLogin] Creating popup web view for \(config.site.makeService().id)")
+            configuration.websiteDataStore = .default()
+            configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+
+            let popupWebView = WKWebView(frame: .zero, configuration: configuration)
+            popupWebView.navigationDelegate = self
+            popupWebView.uiDelegate = self
+            popupWebView.customUserAgent = webView.customUserAgent
+            popupWebView.allowsBackForwardNavigationGestures = true
+            popupWebView.scrollView.contentInsetAdjustmentBehavior = .always
+            popupWebView.translatesAutoresizingMaskIntoConstraints = false
+
+            let closeButton = UIButton(type: .system)
+            closeButton.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
+            closeButton.tintColor = .secondaryLabel
+            closeButton.backgroundColor = .systemBackground.withAlphaComponent(0.85)
+            closeButton.layer.cornerRadius = 18
+            closeButton.translatesAutoresizingMaskIntoConstraints = false
+            closeButton.addAction(UIAction { [weak popupWebView] _ in
+                popupWebView?.removeFromSuperview()
+            }, for: .touchUpInside)
+
+            webView.addSubview(popupWebView)
+            popupWebView.addSubview(closeButton)
+
+            NSLayoutConstraint.activate([
+                popupWebView.leadingAnchor.constraint(equalTo: webView.leadingAnchor),
+                popupWebView.trailingAnchor.constraint(equalTo: webView.trailingAnchor),
+                popupWebView.topAnchor.constraint(equalTo: webView.topAnchor),
+                popupWebView.bottomAnchor.constraint(equalTo: webView.bottomAnchor),
+
+                closeButton.topAnchor.constraint(equalTo: popupWebView.safeAreaLayoutGuide.topAnchor, constant: 10),
+                closeButton.trailingAnchor.constraint(equalTo: popupWebView.safeAreaLayoutGuide.trailingAnchor, constant: -10),
+                closeButton.widthAnchor.constraint(equalToConstant: 36),
+                closeButton.heightAnchor.constraint(equalToConstant: 36)
+            ])
+
+            return popupWebView
+        }
+
+        func webViewDidClose(_ webView: WKWebView) {
+            AppLogger.debug("[WebLogin] Popup web view closed for \(config.site.makeService().id)")
+            checkCookiesWithRetry(webView: webView, retries: 3)
+            webView.removeFromSuperview()
+        }
+
+        func checkCookiesWithRetry(webView: WKWebView, retries: Int) {
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
                 guard !self.didReportSuccess else { return }
 
-                guard self.config.hasAuthenticatedSession(in: cookies) || !requireAuthenticatedCookie else {
-                    return
-                }
-
                 guard self.config.hasAuthenticatedSession(in: cookies) else {
-                    print("[WebLogin] Matched success URL but authenticated cookie is missing. Retries left: \(retries)")
+                    AppLogger.debug("[WebLogin] Authenticated cookie is missing. Retries left: \(retries)")
                     if retries > 0 {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                             self.checkCookiesWithRetry(webView: webView, retries: retries - 1)
@@ -208,8 +279,7 @@ struct WebLoginView: UIViewRepresentable {
                 }
 
                 let siteCookies = self.config.siteCookies(from: cookies)
-                let siteCookieNames = siteCookies.map(\.name).joined(separator: ", ")
-                print("[WebLogin] Authenticated session detected for \(self.config.site.makeService().id): \(siteCookieNames)")
+                AppLogger.debug("[WebLogin] Authenticated session detected for \(self.config.site.makeService().id): \(siteCookies.count) cookies")
                 self.didReportSuccess = true
 
                 // Fire the success callback so cookies get persisted to the app database.
@@ -283,7 +353,7 @@ struct WebLoginSheetView: View {
     private func saveCurrentSession() {
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
             let siteCookies = config.siteCookies(from: cookies)
-            print("[WebLogin] Manual save for \(config.site.makeService().id): \(siteCookies.count) site cookies")
+            AppLogger.debug("[WebLogin] Manual save for \(config.site.makeService().id): \(siteCookies.count) site cookies")
             guard !siteCookies.isEmpty else { return }
 
             DispatchQueue.main.async {

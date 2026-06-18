@@ -22,6 +22,7 @@ class ThreadDetailViewModel: ObservableObject {
         self.service = service
         self.contextThreads = contextThreads
         self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: thread.id, serviceId: service.id)
+        markCurrentZhihuRecommendationAsRead()
     }
 
     func goPrevious() {
@@ -51,10 +52,18 @@ class ThreadDetailViewModel: ObservableObject {
         self.comments = []
         self.currentPage = 1
         self.isBookmarked = DatabaseManager.shared.isBookmarked(threadId: newThread.id, serviceId: service.id)
+        markCurrentZhihuRecommendationAsRead()
 
         Task {
             await loadDetails()
         }
+    }
+
+    private func markCurrentZhihuRecommendationAsRead() {
+        guard thread.community.id == "recommend",
+              let zhihuService = service as? ZhihuService else { return }
+
+        zhihuService.markPostAsRead(threadId: thread.id)
     }
 
     func loadDetails() async {
@@ -74,7 +83,7 @@ class ThreadDetailViewModel: ObservableObject {
         // Load from cache first (instant display)
         if useCache, let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
             if isInvalidCachedDetail(cached.0) {
-                print("[ThreadDetailViewModel] Ignored invalid cached detail for \(service.id)/\(thread.id)")
+                AppLogger.debug("[ThreadDetailViewModel] Ignored invalid cached detail for \(service.id)/\(thread.id)")
                 comments = []
             } else {
                 self.thread = cached.0
@@ -122,7 +131,7 @@ class ThreadDetailViewModel: ObservableObject {
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
         } catch {
-            print("Error loading details: \(error)")
+            AppLogger.debug("Error loading details: \(error)")
         }
     }
 
@@ -131,7 +140,7 @@ class ThreadDetailViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         let nextPage = currentPage + 1
-        print("Loading more comments page: \(nextPage)")
+        AppLogger.debug("Loading more comments page: \(nextPage)")
 
         do {
             let (_, newComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: nextPage)
@@ -152,7 +161,7 @@ class ThreadDetailViewModel: ObservableObject {
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
         } catch {
-            print("Error loading more comments: \(error)")
+            AppLogger.debug("Error loading more comments: \(error)")
         }
     }
 
@@ -228,7 +237,7 @@ class ThreadDetailViewModel: ObservableObject {
             }
             self.shouldScrollAfterReply = true
         } catch {
-            print("Error refreshing after reply: \(error)")
+            AppLogger.debug("Error refreshing after reply: \(error)")
         }
     }
 

@@ -19,6 +19,21 @@ class ThreadListViewModel: ObservableObject {
     private var prefetchQueue: [Thread] = []
     private var isQueueProcessing = false
     private var pendingPrefetches: [String: Task<Void, Never>] = [:]
+    private let maxPrefetchQueueSize = 5
+
+    static let backgroundPrefetchEnabledKey = "background_prefetch_enabled"
+
+    private var isBackgroundPrefetchEnabled: Bool {
+        UserDefaults.standard.bool(forKey: Self.backgroundPrefetchEnabledKey)
+    }
+
+    private var serviceAllowsBackgroundPrefetch: Bool {
+        ["hackernews", "rss"].contains(service.id)
+    }
+
+    var allowsConfiguredBackgroundPrefetch: Bool {
+        isBackgroundPrefetchEnabled && serviceAllowsBackgroundPrefetch
+    }
 
     init(service: ForumService) {
         self.service = service
@@ -60,7 +75,8 @@ class ThreadListViewModel: ObservableObject {
             defer { isLoading = false }
 
             do {
-                let newThreads = try await service.fetchCategoryThreads(categoryId: community.id, communities: [community], page: 1)
+                let previousThreads = self.threads
+                let newThreads = try await service.refreshCategoryThreads(categoryId: community.id, communities: [community])
 
                 guard shouldAcceptFreshThreads(newThreads) else {
                     if service.id == "4d4y" {
@@ -76,6 +92,9 @@ class ThreadListViewModel: ObservableObject {
                 self.threads = newThreads
                 self.canLoadMore = !newThreads.isEmpty
                 self.currentPage = 1
+                if !newThreads.isEmpty && !hasChanges(old: previousThreads, new: newThreads) {
+                    showRefreshMessage("No new posts yet.")
+                }
                 // Small delay to ensure UI updates propagate to refreshable modifier
                 try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             } catch is CancellationError {
@@ -83,11 +102,11 @@ class ThreadListViewModel: ObservableObject {
             } catch let error as URLError where error.code == .cancelled {
                 // Ignore cancellation
             } catch let error as URLError where error.code == .userAuthenticationRequired {
-                print("Error force refreshing topics: \(error)")
+                AppLogger.debug("Error force refreshing topics: \(error)")
                 needsLogin = true
                 showRefreshMessage("Login required. Redirecting to Login.")
             } catch {
-                print("Error force refreshing topics: \(error)")
+                AppLogger.debug("Error force refreshing topics: \(error)")
                 showRefreshMessage("Refresh failed. Check network or login and try again.")
             }
         // If returning from detail or cache exists, load cache first
@@ -111,7 +130,7 @@ class ThreadListViewModel: ObservableObject {
 
             do {
                 let newThreads = try await service.fetchCategoryThreads(categoryId: community.id, communities: [community], page: 1)
-                print("[ThreadListViewModel] Fetched \(newThreads.count) threads for \(community.id)")
+                AppLogger.debug("[ThreadListViewModel] Fetched \(newThreads.count) threads for \(community.id)")
 
                 guard shouldAcceptFreshThreads(newThreads) else { return }
 
@@ -123,10 +142,10 @@ class ThreadListViewModel: ObservableObject {
             } catch let error as URLError where error.code == .cancelled {
                 // Ignore cancellation
             } catch let error as URLError where error.code == .userAuthenticationRequired {
-                print("Error loading topics: \(error)")
+                AppLogger.debug("Error loading topics: \(error)")
                 needsLogin = true
             } catch {
-                print("Error loading topics: \(error)")
+                AppLogger.debug("Error loading topics: \(error)")
             }
         }
     }
@@ -150,10 +169,10 @@ class ThreadListViewModel: ObservableObject {
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
         } catch let error as URLError where error.code == .userAuthenticationRequired {
-            print("Error fetching fresh data: \(error)")
+            AppLogger.debug("Error fetching fresh data: \(error)")
             needsLogin = true
         } catch {
-            print("Error fetching fresh data: \(error)")
+            AppLogger.debug("Error fetching fresh data: \(error)")
         }
     }
 
@@ -185,7 +204,7 @@ class ThreadListViewModel: ObservableObject {
             return true
         }
 
-        print("[ThreadListViewModel] Ignored empty refresh to preserve \(threads.count) visible threads.")
+        AppLogger.debug("[ThreadListViewModel] Ignored empty refresh to preserve \(threads.count) visible threads.")
         return false
     }
 
@@ -209,7 +228,7 @@ class ThreadListViewModel: ObservableObject {
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
         } catch {
-            print("Error loading more topics: \(error)")
+            AppLogger.debug("Error loading more topics: \(error)")
         }
     }
 
@@ -223,9 +242,9 @@ class ThreadListViewModel: ObservableObject {
     }
 
     func prefetchThread(thread: Thread) {
-        // Allow prefetch for all sites.
-        // guard service.id == "4d4y" else { return }
-
+        guard allowsConfiguredBackgroundPrefetch else { return }
+        guard NetworkMonitor.shared.isWiFi else { return }
+        guard prefetchQueue.count < maxPrefetchQueueSize else { return }
 
         // Skip if already in local DB
         if DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) != nil {
@@ -241,7 +260,8 @@ class ThreadListViewModel: ObservableObject {
 
             if !Task.isCancelled {
                 // Add to queue if not already present
-                if !prefetchQueue.contains(where: { $0.id == thread.id }) {
+                if prefetchQueue.count < maxPrefetchQueueSize,
+                   !prefetchQueue.contains(where: { $0.id == thread.id }) {
                     prefetchQueue.append(thread)
                     processPrefetchQueue()
                 }
@@ -256,7 +276,7 @@ class ThreadListViewModel: ObservableObject {
         if let task = pendingPrefetches[threadId] {
             task.cancel()
             pendingPrefetches.removeValue(forKey: threadId)
-            print("[Prefetch] Cancelled pending download for thread: \(threadId) (scrolled past)")
+            AppLogger.debug("[Prefetch] Cancelled pending download for thread: \(threadId) (scrolled past)")
         }
     }
 
@@ -268,7 +288,7 @@ class ThreadListViewModel: ObservableObject {
             while !prefetchQueue.isEmpty {
                 // Double check WiFi at start of each item
                 guard NetworkMonitor.shared.isWiFi else {
-                    print("[Prefetch] Paused: Not on WiFi.")
+                    AppLogger.debug("[Prefetch] Paused: Not on WiFi.")
                     prefetchQueue.removeAll()
                     isQueueProcessing = false
                     return
@@ -277,7 +297,7 @@ class ThreadListViewModel: ObservableObject {
                 let thread = prefetchQueue.removeFirst()
 
                 do {
-                    print("[Prefetch] Starting individual download for thread: \(thread.id)")
+                    AppLogger.debug("[Prefetch] Starting individual download for thread: \(thread.id)")
                     let (fetchedThread, fetchedComments, _) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
 
                     let updatedThread = Thread(
@@ -298,7 +318,7 @@ class ThreadListViewModel: ObservableObject {
                     // 3. Rate control: Wait before next download
                     try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second delay
                 } catch {
-                    print("[Prefetch] Error prefetching \(thread.id): \(error)")
+                    AppLogger.debug("[Prefetch] Error prefetching \(thread.id): \(error)")
                 }
             }
             isQueueProcessing = false

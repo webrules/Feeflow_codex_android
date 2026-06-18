@@ -12,12 +12,18 @@
 
 /* Begin PBXFileReference section */
 		E4B7AFA82F1B7F760090C092 /* Feedflow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Feedflow.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4B7B1002F1C00000090C092 /* FeedflowTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FeedflowTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E4B7AFAA2F1B7F760090C092 /* Feedflow */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Feedflow;
+			sourceTree = "<group>";
+		};
+		E4B7B1012F1C00000090C092 /* FeedflowTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = FeedflowTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +37,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E4B7B1022F1C00000090C092 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +51,7 @@
 			isa = PBXGroup;
 			children = (
 				E4B7AFAA2F1B7F760090C092 /* Feedflow */,
+				E4B7B1012F1C00000090C092 /* FeedflowTests */,
 				E4B7AFA92F1B7F760090C092 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +60,7 @@
 			isa = PBXGroup;
 			children = (
 				E4B7AFA82F1B7F760090C092 /* Feedflow.app */,
+				E4B7B1002F1C00000090C092 /* FeedflowTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,7 +91,40 @@
 			productReference = E4B7AFA82F1B7F760090C092 /* Feedflow.app */;
 			productType = "com.apple.product-type.application";
 		};
+		E4B7B1052F1C00000090C092 /* FeedflowTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E4B7B10A2F1C00000090C092 /* Build configuration list for PBXNativeTarget "FeedflowTests" */;
+			buildPhases = (
+				E4B7B1042F1C00000090C092 /* Sources */,
+				E4B7B1022F1C00000090C092 /* Frameworks */,
+				E4B7B1032F1C00000090C092 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E4B7B1072F1C00000090C092 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				E4B7B1012F1C00000090C092 /* FeedflowTests */,
+			);
+			name = FeedflowTests;
+			packageProductDependencies = (
+			);
+			productName = FeedflowTests;
+			productReference = E4B7B1002F1C00000090C092 /* FeedflowTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		E4B7B1062F1C00000090C092 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E4B7AFA02F1B7F760090C092 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E4B7AFA72F1B7F760090C092;
+			remoteInfo = Feedflow;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		E4B7AFA02F1B7F760090C092 /* Project object */ = {
@@ -88,6 +136,10 @@
 				TargetAttributes = {
 					E4B7AFA72F1B7F760090C092 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					E4B7B1052F1C00000090C092 = {
+						CreatedOnToolsVersion = 26.2;
+						TestTargetID = E4B7AFA72F1B7F760090C092;
 					};
 				};
 			};
@@ -109,12 +161,20 @@
 			projectRoot = "";
 			targets = (
 				E4B7AFA72F1B7F760090C092 /* Feedflow */,
+				E4B7B1052F1C00000090C092 /* FeedflowTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		E4B7AFA62F1B7F760090C092 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E4B7B1032F1C00000090C092 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -131,7 +191,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E4B7B1042F1C00000090C092 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E4B7B1072F1C00000090C092 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E4B7AFA72F1B7F760090C092 /* Feedflow */;
+			targetProxy = E4B7B1062F1C00000090C092 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		E4B7AFB12F1B7F770090C092 /* Debug */ = {
@@ -325,6 +400,53 @@
 			};
 			name = Release;
 		};
+		E4B7B1082F1C00000090C092 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = W9BM9CKSBQ;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joey.FeedflowTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Feedflow.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Feedflow";
+			};
+			name = Debug;
+		};
+		E4B7B1092F1C00000090C092 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = W9BM9CKSBQ;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.joey.FeedflowTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Feedflow.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Feedflow";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -342,6 +464,15 @@
 			buildConfigurations = (
 				E4B7AFB42F1B7F770090C092 /* Debug */,
 				E4B7AFB52F1B7F770090C092 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E4B7B10A2F1C00000090C092 /* Build configuration list for PBXNativeTarget "FeedflowTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E4B7B1082F1C00000090C092 /* Debug */,
+				E4B7B1092F1C00000090C092 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

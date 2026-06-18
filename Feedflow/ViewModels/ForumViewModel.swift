@@ -46,7 +46,7 @@ class ForumViewModel: ObservableObject {
         } catch let error as URLError where error.code == .cancelled {
             // Ignore
         } catch {
-            print("Failed to fetch data: \(error)")
+            AppLogger.debug("Failed to fetch data: \(error)")
         }
     }
 
@@ -64,7 +64,7 @@ class ForumViewModel: ObservableObject {
         let newCommunities = fetched.filter { !cachedIds.contains($0.id) }
         resolved.append(contentsOf: newCommunities)
 
-        print("[ForumViewModel] Preserved \(resolved.count - fetched.count) cached 4D4Y communities because fresh fetch returned fewer communities (\(fetched.count) < \(communities.count)).")
+        AppLogger.debug("[ForumViewModel] Preserved \(resolved.count - fetched.count) cached 4D4Y communities because fresh fetch returned fewer communities (\(fetched.count) < \(communities.count)).")
         return resolved
     }
 

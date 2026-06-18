@@ -20,6 +20,7 @@ protocol ForumService {
 
     func fetchCategories() async throws -> [Community]
     func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [Thread]
+    func refreshCategoryThreads(categoryId: String, communities: [Community]) async throws -> [Thread]
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (Thread, [Comment], Int?)
     func postComment(topicId: String, categoryId: String, content: String) async throws
     func createThread(categoryId: String, title: String, content: String) async throws
@@ -42,6 +43,10 @@ extension ForumService {
 
     // Maintain backward compatibility for existing callers (default page 1)
     func fetchCategoryThreads(categoryId: String, communities: [Community]) async throws -> [Thread] {
+        return try await fetchCategoryThreads(categoryId: categoryId, communities: communities, page: 1)
+    }
+
+    func refreshCategoryThreads(categoryId: String, communities: [Community]) async throws -> [Thread] {
         return try await fetchCategoryThreads(categoryId: categoryId, communities: communities, page: 1)
     }
 

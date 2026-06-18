@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @State private var geminiKey: String = ""
+    @State private var backgroundPrefetchEnabled = UserDefaults.standard.bool(forKey: ThreadListViewModel.backgroundPrefetchEnabledKey)
     @Environment(\.dismiss) var dismiss
     @ObservedObject var localizationManager = LocalizationManager.shared
 
@@ -13,6 +14,14 @@ struct SettingsView: View {
                         .textContentType(.password)
 
                     Text("api_key_note".localized())
+                        .font(.caption)
+                        .foregroundColor(.forumTextSecondary)
+                }
+
+                Section(header: Text("reading".localized())) {
+                    Toggle("background_prefetch".localized(), isOn: $backgroundPrefetchEnabled)
+
+                    Text("background_prefetch_note".localized())
                         .font(.caption)
                         .foregroundColor(.forumTextSecondary)
                 }
@@ -43,12 +52,13 @@ struct SettingsView: View {
     }
 
     private func loadKey() {
-        if let key = DatabaseManager.shared.getSetting(key: "gemini_api_key") {
+        if let key = DatabaseManager.shared.getEncryptedSetting(key: "gemini_api_key") {
             geminiKey = key
         }
     }
 
     private func saveKey() {
-        DatabaseManager.shared.saveSetting(key: "gemini_api_key", value: geminiKey)
+        DatabaseManager.shared.saveEncryptedSetting(key: "gemini_api_key", value: geminiKey)
+        UserDefaults.standard.set(backgroundPrefetchEnabled, forKey: ThreadListViewModel.backgroundPrefetchEnabledKey)
     }
 }

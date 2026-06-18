@@ -45,6 +45,9 @@ class LocalizationManager: ObservableObject {
             "gemini_api_key": ["en": "Gemini API Key", "zh": "Gemini API 密钥"],
             "enter_api_key": ["en": "Enter API Key", "zh": "输入 API 密钥"],
             "api_key_note": ["en": "Get your API key from Google AI Studio", "zh": "从 Google AI Studio 获取您的 API 密钥"],
+            "reading": ["en": "Reading", "zh": "阅读"],
+            "background_prefetch": ["en": "Background prefetch", "zh": "后台预取"],
+            "background_prefetch_note": ["en": "When enabled, Feedflow preloads details only for public read-only sources while on Wi-Fi.", "zh": "启用后，Feedflow 仅在 Wi-Fi 下预加载公开只读来源的详情。"],
 
             // AI Summary
             "ai_assistant": ["en": "AI Assistant", "zh": "AI 助手"],

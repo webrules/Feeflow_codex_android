@@ -202,7 +202,7 @@ class RSSService: ForumService {
                             )
                         }
                     } catch {
-                        print("Error fetching daily updates for \(feed.name): \(error)")
+                        AppLogger.debug("Error fetching daily updates for \(feed.name): \(error)")
                         return []
                     }
                 }
@@ -231,7 +231,7 @@ class RSSService: ForumService {
             let styleRegex = try NSRegularExpression(pattern: "<style[^>]*>[\\s\\S]*?</style>", options: .caseInsensitive)
             processed = styleRegex.stringByReplacingMatches(in: processed, range: NSRange(processed.startIndex..., in: processed), withTemplate: "")
         } catch {
-            print("Regex error (scripts): \(error)")
+            AppLogger.debug("Regex error (scripts): \(error)")
         }
 
         // 1. Handle Images
@@ -248,7 +248,7 @@ class RSSService: ForumService {
                 }
             }
         } catch {
-            print("Regex error (images): \(error)")
+            AppLogger.debug("Regex error (images): \(error)")
         }
 
         // 2. Handle line breaks and paragraphs
@@ -284,7 +284,7 @@ class RSSService: ForumService {
                 }
             }
         } catch {
-            print("Regex error (links): \(error)")
+            AppLogger.debug("Regex error (links): \(error)")
         }
 
         // 3. Strip remaining HTML tags

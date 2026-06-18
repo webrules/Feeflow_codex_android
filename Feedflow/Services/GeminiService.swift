@@ -5,17 +5,14 @@ import Foundation
 import GoogleGenerativeAI
 
 class GeminiService {
-    // Replace with your actual key or handle secure storage
     private var apiKey: String? {
-        // Fallback to hardcoded for dev, but prioritize DB
-        return DatabaseManager.shared.getSetting(key: "gemini_api_key") ?? "YOUR_HARDCODED_KEY_IF_NEEDED"
+        DatabaseManager.shared.getEncryptedSetting(key: "gemini_api_key")
     }
     
     private var model: GenerativeModel?
     
     init() {
-        if let key = apiKey, !key.isEmpty, key != "YOUR_HARDCODED_KEY_IF_NEEDED" {
-            // Updated based on available models list (Step 865)
+        if let key = apiKey, !key.isEmpty {
             self.model = GenerativeModel(name: "gemini-pro-latest", apiKey: key)
         }
     }
@@ -47,7 +44,7 @@ class GeminiService {
 class GeminiService {
     func generateSummary(for content: String) async throws -> String {
         // Fallback or Mock implementation when the package is not yet added
-        print("⚠️ GoogleGenerativeAI package is missing. Please add https://github.com/google/generative-ai-swift to your Xcode project.")
+        AppLogger.debug("⚠️ GoogleGenerativeAI package is missing. Please add https://github.com/google/generative-ai-swift to your Xcode project.")
         try? await Task.sleep(nanoseconds: 1 * 1_000_000_000)
         return """
         [Dependency Missing]

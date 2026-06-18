@@ -26,12 +26,12 @@ class DiscourseService: ForumService {
             if await validateSession() {
                 return true
             }
-            print("[Discourse] Saved cookies did not validate; checking WKWebView cookies")
+            AppLogger.debug("[Discourse] Saved cookies did not validate; checking WKWebView cookies")
         }
 
         let webCookies = linuxCookies(from: await webKitCookies(for: "linux.do"))
         if !webCookies.isEmpty {
-            print("[Discourse] Importing \(webCookies.count) Linux.do cookies from WKWebView")
+            AppLogger.debug("[Discourse] Importing \(webCookies.count) Linux.do cookies from WKWebView")
             DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
             syncCookies(webCookies)
 
@@ -194,7 +194,7 @@ class DiscourseService: ForumService {
     }
 
     private func validateSession() async -> Bool {
-        guard let url = URL(string: "\(baseURL)/categories.json") else {
+        guard let url = URL(string: "\(baseURL)/session/current.json") else {
             return false
         }
 
@@ -206,16 +206,21 @@ class DiscourseService: ForumService {
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode)
             else {
-                print("[Discourse] Session validation failed: categories.json was not accessible")
+                AppLogger.debug("[Discourse] Session validation failed: session/current.json was not accessible")
                 return false
             }
 
-            let siteResponse = try JSONDecoder().decode(SiteResponse.self, from: data)
-            let isReady = !siteResponse.categoryList.categories.isEmpty
-            print("[Discourse] Session validation \(isReady ? "succeeded" : "failed"): categories=\(siteResponse.categoryList.categories.count)")
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                AppLogger.debug("[Discourse] Session validation failed: invalid current session payload")
+                return false
+            }
+
+            let currentUser = object["current_user"]
+            let isReady = currentUser != nil && !(currentUser is NSNull)
+            AppLogger.debug("[Discourse] Session validation \(isReady ? "succeeded" : "failed"): current_user=\(isReady)")
             return isReady
         } catch {
-            print("[Discourse] Session validation error: \(error)")
+            AppLogger.debug("[Discourse] Session validation error: \(error)")
             return false
         }
     }
@@ -451,7 +456,7 @@ class DiscourseService: ForumService {
                     communities.append(contentsOf: cats)
                 }
             } catch {
-                print("[Discourse] Failed to fetch categories: \(error)")
+                AppLogger.debug("[Discourse] Failed to fetch categories: \(error)")
             }
         }
 
@@ -474,10 +479,10 @@ class DiscourseService: ForumService {
         let (data, response) = try await URLSession.shared.data(for: authorizedRequest(url: url))
 
         if let httpResponse = response as? HTTPURLResponse {
-            print("[Discourse] Fetching \(urlStr) - Status: \(httpResponse.statusCode)")
+            AppLogger.debug("[Discourse] Fetching \(urlStr) - Status: \(httpResponse.statusCode)")
             // If category page requires auth, fall back to latest
             if httpResponse.statusCode == 403 && categoryId != "latest" {
-                print("[Discourse] Category requires auth, falling back to /latest.json")
+                AppLogger.debug("[Discourse] Category requires auth, falling back to /latest.json")
                 guard let fallbackURL = URL(string: "\(baseURL)/latest.json?page=\(page - 1)") else {
                     throw URLError(.badURL)
                 }
@@ -568,7 +573,7 @@ class DiscourseService: ForumService {
         var itemsById = Dictionary(uniqueKeysWithValues: initialItems.map { ($0.id, $0) })
 
         let missingIds = requestedIds.filter { itemsById[$0] == nil }
-        print("[Discourse] Topic \(threadId) page \(page): initial=\(initialItems.count), stream=\(streamIds.count), requested=\(requestedIds.count), missing=\(missingIds.count)")
+        AppLogger.debug("[Discourse] Topic \(threadId) page \(page): initial=\(initialItems.count), stream=\(streamIds.count), requested=\(requestedIds.count), missing=\(missingIds.count)")
         let fetchedItems = try await fetchThreadPosts(postIds: missingIds)
         for item in fetchedItems {
             itemsById[item.id] = item
@@ -611,7 +616,7 @@ class DiscourseService: ForumService {
             } catch let error as URLError where error.code == .userAuthenticationRequired {
                 throw URLError(.userAuthenticationRequired)
             } catch {
-                print("[Discourse] Failed to fetch post \(postId): \(error)")
+                AppLogger.debug("[Discourse] Failed to fetch post \(postId): \(error)")
             }
         }
 
@@ -702,7 +707,7 @@ class DiscourseService: ForumService {
                 }
             }
         } catch {
-            print("Regex error in cleanContent: \(error)")
+            AppLogger.debug("Regex error in cleanContent: \(error)")
         }
 
         // 1. Extract images
@@ -722,7 +727,7 @@ class DiscourseService: ForumService {
                 }
             }
         } catch {
-            print("Regex error in cleanContent (images): \(error)")
+            AppLogger.debug("Regex error in cleanContent (images): \(error)")
         }
 
         // 2. Formatting

@@ -21,7 +21,7 @@ class V2EXService: ForumService {
         for cookie in relevant {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
-        print("[V2EX] Restored \(relevant.count) cookies to session")
+        AppLogger.debug("[V2EX] Restored \(relevant.count) cookies to session")
         return true
     }
 
@@ -48,12 +48,12 @@ class V2EXService: ForumService {
         let pageHTML = String(decoding: pageData, as: UTF8.self)
 
         if let httpResp = pageResponse as? HTTPURLResponse {
-            print("[V2EX] Topic page status: \(httpResp.statusCode), HTML length: \(pageHTML.count)")
+            AppLogger.debug("[V2EX] Topic page status: \(httpResp.statusCode), HTML length: \(pageHTML.count)")
         }
 
         // Debug: check if we're logged in (logged-in pages have /signout or /settings)
         let isLoggedIn = pageHTML.contains("/signout") || pageHTML.contains("/settings")
-        print("[V2EX] Page appears logged in: \(isLoggedIn)")
+        AppLogger.debug("[V2EX] Page appears logged in: \(isLoggedIn)")
 
         // Try multiple patterns for the `once` token
         var onceToken: String?
@@ -73,28 +73,28 @@ class V2EXService: ForumService {
                let match = regex.firstMatch(in: pageHTML, options: [], range: range),
                let r = Range(match.range(at: 1), in: pageHTML) {
                 onceToken = String(pageHTML[r])
-                print("[V2EX] Found once token via pattern #\(i): \(onceToken!)")
+                AppLogger.debug("[V2EX] Found once token via pattern #\(i): <redacted>")
                 break
             }
         }
 
-        // If still not found, log a snippet of the reply form area
+        // If still not found, record only structural diagnostics.
         if onceToken == nil {
             if let formRange = pageHTML.range(of: "reply_content") {
                 let start = pageHTML.index(formRange.lowerBound, offsetBy: -200, limitedBy: pageHTML.startIndex) ?? pageHTML.startIndex
                 let end = pageHTML.index(formRange.upperBound, offsetBy: 500, limitedBy: pageHTML.endIndex) ?? pageHTML.endIndex
-                print("[V2EX] Reply form area: \(pageHTML[start..<end])")
+                AppLogger.debug("[V2EX] Reply form area exists; redacted length: \(pageHTML[start..<end].count)")
             } else {
-                print("[V2EX] No reply_content found in page. Page snippet (last 500 chars): \(String(pageHTML.suffix(500)))")
+                AppLogger.debug("[V2EX] No reply_content found in page. HTML length: \(pageHTML.count)")
             }
         }
 
         guard let once = onceToken else {
-            print("[V2EX] Failed to find 'once' CSRF token. User may not be logged in.")
+            AppLogger.debug("[V2EX] Failed to find 'once' CSRF token. User may not be logged in.")
             throw NSError(domain: "V2EX", code: 403, userInfo: [NSLocalizedDescriptionKey: "Not logged in or CSRF token not found. Please log in first."])
         }
 
-        print("[V2EX] Found once token: \(once)")
+        AppLogger.debug("[V2EX] Found once token: <redacted>")
 
         // Step 2: POST the reply
         var postRequest = URLRequest(url: topicURL)
@@ -115,9 +115,9 @@ class V2EXService: ForumService {
         let (_, postResponse) = try await URLSession.shared.data(for: postRequest)
 
         if let httpResponse = postResponse as? HTTPURLResponse {
-            print("[V2EX] Post reply response status: \(httpResponse.statusCode)")
+            AppLogger.debug("[V2EX] Post reply response status: \(httpResponse.statusCode)")
             if httpResponse.statusCode == 302 || httpResponse.statusCode == 200 {
-                print("[V2EX] Reply posted successfully")
+                AppLogger.debug("[V2EX] Reply posted successfully")
             } else {
                 throw NSError(domain: "V2EX", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Failed to post reply (HTTP \(httpResponse.statusCode))"])
             }
@@ -170,11 +170,11 @@ class V2EXService: ForumService {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let httpResponse = response as? HTTPURLResponse {
-            print("[V2EX] Fetching \(url) - Status: \(httpResponse.statusCode)")
+            AppLogger.debug("[V2EX] Fetching \(url) - Status: \(httpResponse.statusCode)")
         }
         let html = String(decoding: data, as: UTF8.self)
-        print("[V2EX] Fetched HTML length: \(html.count)")
-        if html.isEmpty { print("[V2EX] HTML is empty!") }
+        AppLogger.debug("[V2EX] Fetched HTML length: \(html.count)")
+        if html.isEmpty { AppLogger.debug("[V2EX] HTML is empty!") }
 
         return parseThreads(from: html, categoryId: categoryId, communities: communities)
     }
@@ -211,7 +211,7 @@ class V2EXService: ForumService {
         let blockRegex = try! NSRegularExpression(pattern: blockPattern, options: [])
         let matches = blockRegex.matches(in: html, range: NSRange(html.startIndex..., in: html))
 
-        print("[V2EX] Parsing threads... Found \(matches.count) initial matches.")
+        AppLogger.debug("[V2EX] Parsing threads... Found \(matches.count) initial matches.")
 
         for match in matches {
             guard let idRange = Range(match.range(at: 1), in: html),
@@ -289,15 +289,15 @@ class V2EXService: ForumService {
                 ))
             }
 
-            print("[V2EX] Improved parsing found \(improvedThreads.count) threads.")
+            AppLogger.debug("[V2EX] Improved parsing found \(improvedThreads.count) threads.")
             if !improvedThreads.isEmpty {
                 return improvedThreads
             } else {
-                 print("[V2EX] Improved parsing failed despite finding cells. Falling back to basic parsing.")
+                 AppLogger.debug("[V2EX] Improved parsing failed despite finding cells. Falling back to basic parsing.")
             }
         }
 
-        print("[V2EX] Returning \(threads.count) threads from basic parsing.")
+        AppLogger.debug("[V2EX] Returning \(threads.count) threads from basic parsing.")
         return threads
     }
 

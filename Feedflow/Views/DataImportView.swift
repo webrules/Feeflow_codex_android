@@ -141,11 +141,11 @@ struct RSSFeedManagerView: View {
                                 showImportSheet = true
                             }
                         } catch {
-                            print("Error reading file: \(error)")
+                            AppLogger.debug("Error reading file: \(error)")
                         }
                     }
                 case .failure(let error):
-                    print("Error picking file: \(error)")
+                    AppLogger.debug("Error picking file: \(error)")
                 }
             }
             .sheet(isPresented: $showImportSheet) {

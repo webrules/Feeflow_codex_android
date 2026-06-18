@@ -319,27 +319,24 @@ struct LoginView: View {
             cookie.domain.contains(domainFilter)
         }
 
-        print("[Login] Total cookies from WKWebView: \(cookies.count)")
-        print("[Login] Relevant cookies for \(siteId) (domain: \(domainFilter)): \(relevantCookies.count)")
-        for cookie in relevantCookies {
-            print("[Login]   - \(cookie.name) = \(cookie.value.prefix(20))... (domain: \(cookie.domain), path: \(cookie.path), expires: \(cookie.expiresDate?.description ?? "session"))")
-        }
+        AppLogger.debug("[Login] Total cookies from WKWebView: \(cookies.count)")
+        AppLogger.debug("[Login] Relevant cookies for \(siteId) (domain: \(domainFilter)): \(relevantCookies.count)")
 
         guard !relevantCookies.isEmpty else {
-            print("[Login] No relevant cookies found for \(siteId); leaving existing session unchanged.")
+            AppLogger.debug("[Login] No relevant cookies found for \(siteId); leaving existing session unchanged.")
             loginStatus[siteId] = false
             return
         }
 
         guard isAuthenticatedCookieSet(site: site, cookies: relevantCookies) else {
-            print("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
+            AppLogger.debug("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
             loginStatus[siteId] = DatabaseManager.shared.hasCookies(siteId: siteId)
             return
         }
 
         // Critical check for Zhihu authentication token
         if site == .zhihu && !relevantCookies.contains(where: { $0.name == "z_c0" }) {
-            print("[Login] CRITICAL WARNING: Zhihu login success but 'z_c0' cookie is missing! API requests will likely fail.")
+            AppLogger.debug("[Login] CRITICAL WARNING: Zhihu login success but 'z_c0' cookie is missing! API requests will likely fail.")
         }
 
         // Make session-only cookies persistent (30 days) so they survive app restarts.
@@ -355,7 +352,7 @@ struct LoginView: View {
 
         // Verify cookies were persisted
         let verified = DatabaseManager.shared.getCookies(siteId: siteId) ?? []
-        print("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
+        AppLogger.debug("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
 
         replaceRuntimeCookies(domainFilter: domainFilter, cookies: persistentCookies)
 
@@ -366,7 +363,7 @@ struct LoginView: View {
             await MainActor.run {
                 loginStatus[siteId] = sessionValid
                 if !sessionValid {
-                    print("[Login] WARNING: Session verification FAILED after login for \(siteId)")
+                    AppLogger.debug("[Login] WARNING: Session verification FAILED after login for \(siteId)")
                     isCompletingLogin = false
                     return
                 }
@@ -403,14 +400,17 @@ struct LoginView: View {
     private func isAuthenticatedCookieSet(site: ForumSite, cookies: [HTTPCookie]) -> Bool {
         switch site {
         case .fourD4Y:
-            return cookies.contains { cookie in
-                let name = cookie.name.lowercased()
-                return name.contains("auth") || name.contains("login") || name.contains("member")
-            }
+            // 4D4Y/Discuz deployments use site-specific cookie prefixes, so
+            // validate the saved session by fetching the forum instead of
+            // rejecting otherwise valid cookies by name here.
+            return !cookies.isEmpty
         case .zhihu:
             return cookies.contains { $0.name == "z_c0" }
         case .linuxDo:
-            return cookies.contains { $0.name.lowercased().contains("_t") }
+            return cookies.contains { cookie in
+                let name = cookie.name.lowercased()
+                return name.contains("_t") || name.contains("remember_user_token")
+            }
         case .hackerNews:
             return cookies.contains { $0.name.lowercased().contains("user") }
         case .v2ex:

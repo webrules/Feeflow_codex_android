@@ -1,6 +1,12 @@
 import Foundation
 import SQLite3
 
+enum DatabaseSchemaMigration {
+    static func needsCompositePrimaryKeyMigration(currentPrimaryKey: [String], expectedPrimaryKey: [String]) -> Bool {
+        currentPrimaryKey != expectedPrimaryKey
+    }
+}
+
 class DatabaseManager {
     static let shared = DatabaseManager()
     private var db: OpaquePointer?
@@ -28,12 +34,12 @@ class DatabaseManager {
         guard let fileURL = try? FileManager.default
             .url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("Feedflow.sqlite") else {
-            print("[DB] Error: Could not resolve documents directory")
+            AppLogger.debug("[DB] Error: Could not resolve documents directory")
             return
         }
 
         if sqlite3_open(fileURL.path, &db) != SQLITE_OK {
-            print("[DB] Error opening database")
+            AppLogger.debug("[DB] Error opening database")
             return
         }
 
@@ -60,10 +66,10 @@ class DatabaseManager {
         var createTableStatement: OpaquePointer?
         if sqlite3_prepare_v2(db, createTableString, -1, &createTableStatement, nil) == SQLITE_OK {
             if sqlite3_step(createTableStatement) != SQLITE_DONE {
-                print("[DB] Communities table could not be created.")
+                AppLogger.debug("[DB] Communities table could not be created.")
             }
         } else {
-            print("[DB] CREATE TABLE statement could not be prepared.")
+            AppLogger.debug("[DB] CREATE TABLE statement could not be prepared.")
         }
         sqlite3_finalize(createTableStatement)
     }
@@ -86,12 +92,12 @@ class DatabaseManager {
                     sqlite3_bind_text(insertStatement, 7, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
 
                     if sqlite3_step(insertStatement) != SQLITE_DONE {
-                        print("[DB] Could not insert row.")
+                        AppLogger.debug("[DB] Could not insert row.")
                     }
                     sqlite3_reset(insertStatement)
                 }
             } else {
-                print("[DB] INSERT statement could not be prepared.")
+                AppLogger.debug("[DB] INSERT statement could not be prepared.")
             }
             sqlite3_finalize(insertStatement)
             sqlite3_exec(db, "COMMIT TRANSACTION", nil, nil, nil)
@@ -130,7 +136,7 @@ class DatabaseManager {
                     ))
                 }
             } else {
-                print("[DB] SELECT statement could not be prepared")
+                AppLogger.debug("[DB] SELECT statement could not be prepared")
             }
             sqlite3_finalize(queryStatement)
             return communities
@@ -149,7 +155,7 @@ class DatabaseManager {
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, createTableString, -1, &statement, nil) == SQLITE_OK {
             if sqlite3_step(statement) == SQLITE_DONE {
-                // print("Settings table created.")
+                // AppLogger.debug("Settings table created.")
             }
         }
         sqlite3_finalize(statement)
@@ -163,10 +169,10 @@ class DatabaseManager {
                 sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_text(statement, 2, (value as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 if sqlite3_step(statement) != SQLITE_DONE {
-                    print("[DB] Error saving setting: \(key)")
+                    AppLogger.debug("[DB] Error saving setting: \(key)")
                 }
             } else {
-                print("[DB] Error preparing save statement for key: \(key)")
+                AppLogger.debug("[DB] Error preparing save statement for key: \(key)")
             }
             sqlite3_finalize(statement)
         }
@@ -199,13 +205,43 @@ class DatabaseManager {
             if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
                 sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 if sqlite3_step(statement) != SQLITE_DONE {
-                    print("[DB] Error removing setting: \(key)")
+                    AppLogger.debug("[DB] Error removing setting: \(key)")
                 }
             } else {
-                print("[DB] Error preparing remove statement for key: \(key)")
+                AppLogger.debug("[DB] Error preparing remove statement for key: \(key)")
             }
             sqlite3_finalize(statement)
         }
+    }
+
+    func saveEncryptedSetting(key: String, value: String) {
+        guard !value.isEmpty else {
+            removeSetting(key: key)
+            return
+        }
+
+        guard let encrypted = EncryptionHelper.shared.encrypt(value) else {
+            AppLogger.error("[DB] Error encrypting setting: \(key)")
+            return
+        }
+
+        saveSetting(key: key, value: encrypted)
+    }
+
+    /// Reads an encrypted setting. If an existing plaintext value is found, it is
+    /// returned once and immediately rewritten encrypted for existing installs.
+    func getEncryptedSetting(key: String, migratePlaintext: Bool = true) -> String? {
+        guard let stored = getSetting(key: key), !stored.isEmpty else { return nil }
+
+        if let decrypted = EncryptionHelper.shared.decrypt(stored) {
+            return decrypted
+        }
+
+        guard migratePlaintext else { return nil }
+
+        saveEncryptedSetting(key: key, value: stored)
+        AppLogger.debug("[DB] Migrated plaintext setting to encrypted storage: \(key)")
+        return stored
     }
 
     // MARK: - Filtered Posts (Zhihu Read/Not-Interested Tracking)
@@ -221,10 +257,10 @@ class DatabaseManager {
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, createTableString, -1, &statement, nil) == SQLITE_OK {
             if sqlite3_step(statement) == SQLITE_DONE {
-                print("[DB] Filtered posts table ready")
+                AppLogger.debug("[DB] Filtered posts table ready")
             }
         } else {
-            print("[DB] Failed to create filtered_posts table")
+            AppLogger.debug("[DB] Failed to create filtered_posts table")
         }
         sqlite3_finalize(statement)
     }
@@ -239,7 +275,7 @@ class DatabaseManager {
                 sqlite3_bind_text(statement, 2, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_int64(statement, 3, Int64(Date().timeIntervalSince1970))
                 if sqlite3_step(statement) != SQLITE_DONE {
-                    print("[DB] Error adding filtered post: \(postId)")
+                    AppLogger.debug("[DB] Error adding filtered post: \(postId)")
                 }
             }
             sqlite3_finalize(statement)
@@ -296,7 +332,7 @@ class DatabaseManager {
                 sqlite3_bind_text(statement, 1, (serviceId as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_int64(statement, 2, ninetyDaysAgo)
                 if sqlite3_step(statement) == SQLITE_DONE {
-                    print("[DB] Cleaned up old filtered posts for \(serviceId)")
+                    AppLogger.debug("[DB] Cleaned up old filtered posts for \(serviceId)")
                 }
             }
             sqlite3_finalize(statement)
@@ -307,10 +343,10 @@ class DatabaseManager {
 
     /// Save cookies with merge — merges new cookies into existing ones (for incremental updates)
     func saveCookies(siteId: String, cookies: [HTTPCookie]) {
-        print("[DB] saveCookies (merge) called for \(siteId) with \(cookies.count) new cookies")
+        AppLogger.debug("[DB] saveCookies (merge) called for \(siteId) with \(cookies.count) new cookies")
 
         var currentCookies = getCookies(siteId: siteId) ?? []
-        print("[DB] Existing cookies for \(siteId): \(currentCookies.count)")
+        AppLogger.debug("[DB] Existing cookies for \(siteId): \(currentCookies.count)")
 
         for newCookie in cookies {
             if let index = currentCookies.firstIndex(where: {
@@ -322,13 +358,13 @@ class DatabaseManager {
             }
         }
 
-        print("[DB] Merged cookie count for \(siteId): \(currentCookies.count)")
+        AppLogger.debug("[DB] Merged cookie count for \(siteId): \(currentCookies.count)")
         persistCookies(siteId: siteId, cookies: currentCookies)
     }
 
     /// Replace cookies entirely — overwrites all existing cookies (for fresh login)
     func replaceCookies(siteId: String, cookies: [HTTPCookie]) {
-        print("[DB] replaceCookies called for \(siteId) with \(cookies.count) cookies (clean overwrite)")
+        AppLogger.debug("[DB] replaceCookies called for \(siteId) with \(cookies.count) cookies (clean overwrite)")
         persistCookies(siteId: siteId, cookies: cookies)
     }
 
@@ -350,49 +386,48 @@ class DatabaseManager {
         }
 
         guard let jsonData = try? JSONSerialization.data(withJSONObject: cookieDicts, options: []) else {
-            print("[DB] ERROR: Failed to serialize cookies to JSON for \(siteId)")
+            AppLogger.debug("[DB] ERROR: Failed to serialize cookies to JSON for \(siteId)")
             return
         }
         guard let jsonString = String(data: jsonData, encoding: .utf8) else {
-            print("[DB] ERROR: Failed to convert cookie JSON data to string for \(siteId)")
+            AppLogger.debug("[DB] ERROR: Failed to convert cookie JSON data to string for \(siteId)")
             return
         }
         guard let encrypted = EncryptionHelper.shared.encrypt(jsonString) else {
-            print("[DB] ERROR: Failed to encrypt cookies for \(siteId)")
+            AppLogger.debug("[DB] ERROR: Failed to encrypt cookies for \(siteId)")
             return
         }
 
-        print("[DB] Saving \(cookies.count) cookies for \(siteId) (\(encrypted.count) chars)")
+        AppLogger.debug("[DB] Saving \(cookies.count) cookies for \(siteId) (\(encrypted.count) chars)")
         saveSetting(key: "login_\(siteId)_cookies", value: encrypted)
 
         // Verify the save worked
         if let verify = getSetting(key: "login_\(siteId)_cookies") {
-            print("[DB] Verified: cookie data saved for \(siteId) (\(verify.count) chars)")
+            AppLogger.debug("[DB] Verified: cookie data saved for \(siteId) (\(verify.count) chars)")
         } else {
-            print("[DB] CRITICAL: Cookie save verification FAILED for \(siteId)!")
+            AppLogger.debug("[DB] CRITICAL: Cookie save verification FAILED for \(siteId)!")
         }
     }
 
     func getCookies(siteId: String) -> [HTTPCookie]? {
         guard let encrypted = getSetting(key: "login_\(siteId)_cookies") else {
-            print("[DB] getCookies: No stored data for \(siteId)")
+            AppLogger.debug("[DB] getCookies: No stored data for \(siteId)")
             return nil
         }
         guard let jsonString = EncryptionHelper.shared.decrypt(encrypted) else {
-            print("[DB] getCookies: Decryption FAILED for \(siteId)")
+            AppLogger.debug("[DB] getCookies: Decryption FAILED for \(siteId)")
             return nil
         }
         guard let jsonData = jsonString.data(using: .utf8) else {
-            print("[DB] getCookies: String to data conversion failed for \(siteId)")
+            AppLogger.debug("[DB] getCookies: String to data conversion failed for \(siteId)")
             return nil
         }
         guard let array = try? JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] else {
-            print("[DB] getCookies: JSON parse failed for \(siteId)")
+            AppLogger.debug("[DB] getCookies: JSON parse failed for \(siteId)")
             return nil
         }
 
-        let storedNames = array.compactMap { $0["name"] as? String }
-        print("[DB DEBUG] getCookies for \(siteId): stored=\(storedNames.joined(separator: ", "))")
+        AppLogger.debug("[DB DEBUG] getCookies for \(siteId): stored=\(array.count)")
         var cookies: [HTTPCookie] = []
         for dict in array {
             var properties: [HTTPCookiePropertyKey: Any] = [:]
@@ -407,15 +442,15 @@ class DatabaseManager {
             if let cookie = HTTPCookie(properties: properties) {
                 // Only skip cookies that have explicitly expired
                 if let expires = cookie.expiresDate, expires < Date() {
-                    print("[DB] Skipping expired cookie: \(cookie.name) (expired \(expires))")
+                    AppLogger.debug("[DB] Skipping expired cookie: \(cookie.name) (expired \(expires))")
                     continue
                 }
                 cookies.append(cookie)
             } else {
-                print("[DB] Failed to create HTTPCookie from dict: \(dict["name"] ?? "unknown")")
+                AppLogger.debug("[DB] Failed to create HTTPCookie from dict: \(dict["name"] ?? "unknown")")
             }
         }
-        print("[DB] getCookies for \(siteId): \(array.count) stored, \(cookies.count) valid")
+        AppLogger.debug("[DB] getCookies for \(siteId): \(array.count) stored, \(cookies.count) valid")
         return cookies
     }
 
@@ -456,7 +491,7 @@ class DatabaseManager {
                 sqlite3_bind_text(statement, 3, (summary as NSString).utf8String, -1, SQLITE_TRANSIENT)
                 sqlite3_bind_int64(statement, 4, Int64(Date().timeIntervalSince1970))
                 if sqlite3_step(statement) != SQLITE_DONE {
-                    print("[DB] Error saving summary for thread: \(threadId)")
+                    AppLogger.debug("[DB] Error saving summary for thread: \(threadId)")
                 }
             }
             sqlite3_finalize(statement)
@@ -575,13 +610,13 @@ class DatabaseManager {
                             do {
                                 result = try JSONDecoder().decode([Thread].self, from: jsonData)
                             } catch {
-                                print("[DB] Failed to decode cached topics for \(cacheKey): \(error)")
+                                AppLogger.debug("[DB] Failed to decode cached topics for \(cacheKey): \(error)")
                             }
                         }
                     }
                 }
             } else {
-                print("[DB] SELECT statement could not be prepared for cached_topics")
+                AppLogger.debug("[DB] SELECT statement could not be prepared for cached_topics")
             }
             sqlite3_finalize(statement)
             return result
@@ -801,36 +836,130 @@ class DatabaseManager {
 
     /// Migrates old single-key tables to composite keys for existing installs.
     private func migrateSchemas() {
-        // Migrate cached_threads: add service_id column if missing
-        migrateAddColumn(table: "cached_threads", column: "service_id", type: "TEXT DEFAULT ''")
-        // Migrate ai_summaries: add service_id column if missing
-        migrateAddColumn(table: "ai_summaries", column: "service_id", type: "TEXT DEFAULT ''")
+        migrateTableToCompositePrimaryKey(
+            table: "cached_threads",
+            createSQL: """
+            CREATE TABLE cached_threads(
+                thread_id TEXT,
+                service_id TEXT DEFAULT '',
+                data TEXT,
+                timestamp INTEGER,
+                PRIMARY KEY (thread_id, service_id)
+            );
+            """,
+            columns: ["thread_id", "service_id", "data", "timestamp"],
+            primaryKeyColumns: ["thread_id", "service_id"]
+        )
+
+        migrateTableToCompositePrimaryKey(
+            table: "ai_summaries",
+            createSQL: """
+            CREATE TABLE ai_summaries(
+                thread_id TEXT,
+                service_id TEXT DEFAULT '',
+                summary TEXT,
+                created_at INTEGER,
+                PRIMARY KEY (thread_id, service_id)
+            );
+            """,
+            columns: ["thread_id", "service_id", "summary", "created_at"],
+            primaryKeyColumns: ["thread_id", "service_id"]
+        )
+
+        if execute("DROP TABLE IF EXISTS zhihu_read_recommendations;") {
+            AppLogger.debug("[DB] Dropped deprecated Zhihu 10-day read recommendations table")
+        }
     }
 
-    private func migrateAddColumn(table: String, column: String, type: String) {
-        // Check if column already exists
+    private func migrateTableToCompositePrimaryKey(
+        table: String,
+        createSQL: String,
+        columns: [String],
+        primaryKeyColumns expectedPrimaryKey: [String]
+    ) {
+        guard DatabaseSchemaMigration.needsCompositePrimaryKeyMigration(
+            currentPrimaryKey: primaryKeyColumns(for: table),
+            expectedPrimaryKey: expectedPrimaryKey
+        ) else { return }
+
+        let existingColumns = tableColumns(for: table)
+        guard columns.first.map(existingColumns.contains) == true else {
+            AppLogger.error("[DB] Cannot migrate \(table): missing required key column")
+            return
+        }
+
+        let backupTable = "\(table)_migration_backup"
+        let insertColumns = columns.joined(separator: ", ")
+        let selectColumns = columns.map { column -> String in
+            if existingColumns.contains(column) {
+                return column == "service_id" ? "COALESCE(service_id, '')" : column
+            }
+            return "''"
+        }.joined(separator: ", ")
+
+        let sql = """
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS \(backupTable);
+        ALTER TABLE \(table) RENAME TO \(backupTable);
+        \(createSQL)
+        INSERT OR REPLACE INTO \(table) (\(insertColumns))
+            SELECT \(selectColumns) FROM \(backupTable);
+        DROP TABLE \(backupTable);
+        COMMIT TRANSACTION;
+        """
+
+        if execute(sql) {
+            AppLogger.debug("[DB] Migrated \(table): rebuilt composite primary key")
+        } else {
+            sqlite3_exec(db, "ROLLBACK TRANSACTION;", nil, nil, nil)
+            AppLogger.error("[DB] Failed to migrate \(table)")
+        }
+    }
+
+    private func tableColumns(for table: String) -> Set<String> {
         let pragmaSQL = "PRAGMA table_info(\(table));"
         var statement: OpaquePointer?
-        var hasColumn = false
+        var columns = Set<String>()
 
         if sqlite3_prepare_v2(db, pragmaSQL, -1, &statement, nil) == SQLITE_OK {
             while sqlite3_step(statement) == SQLITE_ROW {
                 if let namePtr = sqlite3_column_text(statement, 1) {
-                    let name = String(cString: namePtr)
-                    if name == column {
-                        hasColumn = true
-                        break
-                    }
+                    columns.insert(String(cString: namePtr))
                 }
             }
         }
         sqlite3_finalize(statement)
+        return columns
+    }
 
-        if !hasColumn {
-            let alterSQL = "ALTER TABLE \(table) ADD COLUMN \(column) \(type);"
-            sqlite3_exec(db, alterSQL, nil, nil, nil)
-            print("[DB] Migrated \(table): added column \(column)")
+    private func primaryKeyColumns(for table: String) -> [String] {
+        let pragmaSQL = "PRAGMA table_info(\(table));"
+        var statement: OpaquePointer?
+        var keyedColumns: [(Int, String)] = []
+
+        if sqlite3_prepare_v2(db, pragmaSQL, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                let keyIndex = Int(sqlite3_column_int(statement, 5))
+                guard keyIndex > 0, let namePtr = sqlite3_column_text(statement, 1) else { continue }
+                keyedColumns.append((keyIndex, String(cString: namePtr)))
+            }
         }
+        sqlite3_finalize(statement)
+
+        return keyedColumns
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
+    }
+
+    @discardableResult
+    private func execute(_ sql: String) -> Bool {
+        var errorMessage: UnsafeMutablePointer<Int8>?
+        let result = sqlite3_exec(db, sql, nil, nil, &errorMessage)
+        if let errorMessage {
+            AppLogger.error("[DB] SQLite error: \(String(cString: errorMessage))")
+            sqlite3_free(errorMessage)
+        }
+        return result == SQLITE_OK
     }
 }
 

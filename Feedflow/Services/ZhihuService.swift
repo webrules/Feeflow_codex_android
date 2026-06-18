@@ -529,8 +529,8 @@ class ZhihuService: ForumService {
 
     init() {
         loadDownvotedIds()
-        loadFilteredPostIds()
         cleanupExpiredFilteredPosts()
+        loadFilteredPostIds()
     }
 
     // MARK: - Session Restore
@@ -545,7 +545,7 @@ class ZhihuService: ForumService {
             for cookie in cookies {
                 HTTPCookieStorage.shared.setCookie(cookie)
             }
-            print("[Zhihu] Restored \(cookies.count) cookies to session")
+            AppLogger.debug("[Zhihu] Restored \(cookies.count) cookies to session")
             return true
         }
 
@@ -576,12 +576,22 @@ class ZhihuService: ForumService {
             let cookieHeader = cookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
             request.httpShouldHandleCookies = false
-            print("[Zhihu] Sending \(cookies.count) cookies: \(cookies.map { $0.name }.joined(separator: ", "))")
+            AppLogger.debug("[Zhihu] Sending \(cookies.count) cookies")
         } else {
-            print("[Zhihu] WARNING: No auth cookies found. User may not be logged in.")
+            AppLogger.debug("[Zhihu] WARNING: No auth cookies found. User may not be logged in.")
         }
 
         return request
+    }
+
+    private func configureExplicitRefresh(_ request: inout URLRequest) {
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+    }
+
+    private func cacheBustingQueryItem() -> URLQueryItem {
+        URLQueryItem(name: "_", value: String(Int(Date().timeIntervalSince1970 * 1000)))
     }
 
     // MARK: - Downvote & Filtered Post Management
@@ -590,7 +600,7 @@ class ZhihuService: ForumService {
         if let saved = DatabaseManager.shared.getSetting(key: "zhihu_downvoted_ids") {
             downvotedIds = Set(saved.components(separatedBy: ",").filter { !$0.isEmpty })
         }
-        print("[Zhihu] Loaded \(downvotedIds.count) downvoted IDs")
+        AppLogger.debug("[Zhihu] Loaded \(downvotedIds.count) downvoted IDs")
     }
 
     private func saveDownvotedIds() {
@@ -601,7 +611,7 @@ class ZhihuService: ForumService {
     private func loadFilteredPostIds() {
         let ids = DatabaseManager.shared.getFilteredPostIds(serviceId: id)
         filteredPostIds = Set(ids)
-        print("[Zhihu] Loaded \(filteredPostIds.count) filtered post IDs from database")
+        AppLogger.debug("[Zhihu] Loaded \(filteredPostIds.count) filtered post IDs from database")
     }
 
     private func cleanupExpiredFilteredPosts() {
@@ -618,7 +628,7 @@ class ZhihuService: ForumService {
         filteredPostIds.insert(idStr)
         saveDownvotedIds()
         DatabaseManager.shared.addFilteredPost(postId: idStr, serviceId: id)
-        print("[Zhihu] Downvoted item: \(idStr)")
+        AppLogger.debug("[Zhihu] Downvoted item: \(idStr)")
 
         // Send uninterest request to Zhihu API
         // This tells Zhihu not to recommend similar content
@@ -629,7 +639,7 @@ class ZhihuService: ForumService {
     func undoDownvote(targetId: String) {
         downvotedIds.remove(targetId)
         saveDownvotedIds()
-        print("[Zhihu] Undid downvote for: \(targetId)")
+        AppLogger.debug("[Zhihu] Undid downvote for: \(targetId)")
     }
 
     /// Check if an item is downvoted
@@ -643,11 +653,11 @@ class ZhihuService: ForumService {
         let parts = threadId.components(separatedBy: "_")
         guard parts.count == 2 else { return }
         let postId = parts[1]
-        
+
         if !filteredPostIds.contains(postId) {
             filteredPostIds.insert(postId)
             DatabaseManager.shared.addFilteredPost(postId: postId, serviceId: id)
-            print("[Zhihu] Marked post as read: \(postId)")
+            AppLogger.debug("[Zhihu] Marked recommendation as read in filtered_posts: \(postId)")
         }
     }
 
@@ -673,10 +683,10 @@ class ZhihuService: ForumService {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             let (_, response) = try await URLSession.shared.data(for: request)
             if let httpResponse = response as? HTTPURLResponse {
-                print("[Zhihu] Uninterest response: \(httpResponse.statusCode)")
+                AppLogger.debug("[Zhihu] Uninterest response: \(httpResponse.statusCode)")
             }
         } catch {
-            print("[Zhihu] Failed to send uninterest: \(error)")
+            AppLogger.debug("[Zhihu] Failed to send uninterest: \(error)")
         }
     }
 
@@ -737,6 +747,17 @@ class ZhihuService: ForumService {
         }
     }
 
+    func refreshCategoryThreads(categoryId: String, communities: [Community]) async throws -> [Thread] {
+        switch categoryId {
+        case "recommend":
+            return try await fetchRecommendFeed(page: 1, forceRefresh: true)
+        case "hot":
+            return try await fetchHotList(page: 1, forceRefresh: true)
+        default:
+            return []
+        }
+    }
+
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (Thread, [Comment], Int?) {
         let parts = threadId.components(separatedBy: "_")
         guard parts.count == 2 else {
@@ -770,84 +791,123 @@ class ZhihuService: ForumService {
 
     // MARK: - Recommendation Feed
 
-    private func fetchRecommendFeed(page: Int) async throws -> [Thread] {
-        let urlStr: String
-        if page == 1 {
-            // First page: use base recommend URL
-            urlStr = "\(webRecommendURL)?desktop=true&limit=10"
-            nextPageURL = nil
-        } else if let nextURL = nextPageURL {
-            // Subsequent pages: use pagination URL
-            urlStr = nextURL
-        } else {
-            // Fallback
-            urlStr = "\(webRecommendURL)?desktop=true&limit=10&after_id=\(page)"
+    private func fetchRecommendFeed(page: Int, forceRefresh: Bool = false) async throws -> [Thread] {
+        cleanupExpiredFilteredPosts()
+        loadFilteredPostIds()
+
+        var allThreads: [Thread] = []
+        var allFeedItems: [ZhihuFeedItem] = []
+        var seenThreadIds = Set<String>()
+        var nextURLOverride: String?
+        let minimumVisibleRecommendations = page == 1 ? 10 : 1
+        let maximumFetchAttempts = page == 1 ? 6 : 1
+
+        for attempt in 0..<maximumFetchAttempts {
+            let urlStr: String
+            if page == 1 && attempt == 0 {
+                // First page: use base recommend URL
+                var components = URLComponents(string: webRecommendURL)
+                var queryItems = [
+                    URLQueryItem(name: "desktop", value: "true"),
+                    URLQueryItem(name: "limit", value: "10")
+                ]
+                if forceRefresh {
+                    queryItems.append(cacheBustingQueryItem())
+                }
+                components?.queryItems = queryItems
+                urlStr = components?.url?.absoluteString ?? "\(webRecommendURL)?desktop=true&limit=10"
+                nextPageURL = nil
+            } else if let nextURL = nextURLOverride ?? nextPageURL {
+                // Subsequent pages: use pagination URL returned by Zhihu.
+                urlStr = nextURL
+            } else if page > 1 {
+                urlStr = "\(webRecommendURL)?desktop=true&limit=10&after_id=\(page)"
+            } else {
+                break
+            }
+
+            let feedResponse = try await fetchRecommendResponse(urlStr: urlStr, forceRefresh: forceRefresh && attempt == 0)
+            let feedItems = feedResponse.data ?? []
+            let threads = convertFeedToThreads(feedItems: feedItems)
+
+            allFeedItems.append(contentsOf: feedItems)
+            for thread in threads where !seenThreadIds.contains(thread.id) {
+                allThreads.append(thread)
+                seenThreadIds.insert(thread.id)
+            }
+
+            nextURLOverride = feedResponse.paging?.next
+            nextPageURL = nextURLOverride
+            AppLogger.debug("[Zhihu] Recommend batch \(attempt + 1): \(feedItems.count) items, \(threads.count) visible, \(allThreads.count) accumulated")
+
+            if allThreads.count >= minimumVisibleRecommendations || nextURLOverride == nil {
+                break
+            }
         }
 
+        // Store raw feed items for downvote capability.
+        currentFeedItems = allFeedItems
+
+        AppLogger.debug("[Zhihu] Returning \(allThreads.count) visible recommend items after filtered_posts hiding")
+        return allThreads
+    }
+
+    private func fetchRecommendResponse(urlStr: String, forceRefresh: Bool) async throws -> ZhihuFeedResponse {
         guard let url = URL(string: urlStr) else {
             throw NSError(domain: "ZhihuService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
         }
 
-        print("[Zhihu] Fetching recommend feed page \(page): \(urlStr)")
-        let request = buildRequest(url: url)
+        AppLogger.debug("[Zhihu] Fetching recommend feed: \(urlStr)")
+        var request = buildRequest(url: url)
+        if forceRefresh {
+            configureExplicitRefresh(&request)
+        }
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse {
-            print("[Zhihu] Recommend response status: \(httpResponse.statusCode)")
+            AppLogger.debug("[Zhihu] Recommend response status: \(httpResponse.statusCode)")
             if httpResponse.statusCode == 401 {
-                print("[Zhihu] Unauthorized - user needs to login")
+                AppLogger.debug("[Zhihu] Unauthorized - user needs to login")
                 throw NSError(domain: "ZhihuService", code: 401, userInfo: [NSLocalizedDescriptionKey: "请先登录知乎 (Please login to Zhihu first)"])
             }
         }
 
-        let decoder = JSONDecoder()
+        AppLogger.debug("[Zhihu] Recommend raw response received: \(data.count) bytes")
 
-        // Debug: log raw response snippet
-        if let jsonStr = String(data: data, encoding: .utf8) {
-            let preview = String(jsonStr.prefix(500))
-            print("[Zhihu] Recommend raw response (first 500 chars): \(preview)")
-        }
-
-        let feedResponse: ZhihuFeedResponse
         do {
-            feedResponse = try decoder.decode(ZhihuFeedResponse.self, from: data)
+            return try JSONDecoder().decode(ZhihuFeedResponse.self, from: data)
         } catch {
-            print("[Zhihu] Failed to decode recommend response: \(error)")
-            return []
+            AppLogger.debug("[Zhihu] Failed to decode recommend response: \(error)")
+            return ZhihuFeedResponse(data: [], paging: nil, freshText: nil)
         }
-
-        // Save next page URL for pagination
-        nextPageURL = feedResponse.paging?.next
-
-        // Store raw feed items for downvote capability
-        currentFeedItems = feedResponse.data ?? []
-
-        // Convert to Thread objects, applying filters
-        let threads = convertFeedToThreads(feedItems: feedResponse.data ?? [])
-        print("[Zhihu] Fetched \(feedResponse.data?.count ?? 0) items, \(threads.count) after filtering")
-
-        return threads
     }
 
     // MARK: - Hot List
 
-    private func fetchHotList(page: Int) async throws -> [Thread] {
-        let urlStr = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=10&desktop=true"
-        guard let url = URL(string: urlStr) else { return [] }
+    private func fetchHotList(page: Int, forceRefresh: Bool = false) async throws -> [Thread] {
+        var components = URLComponents(string: "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total")
+        var queryItems = [
+            URLQueryItem(name: "limit", value: "10"),
+            URLQueryItem(name: "desktop", value: "true")
+        ]
+        if forceRefresh {
+            queryItems.append(cacheBustingQueryItem())
+        }
+        components?.queryItems = queryItems
+        guard let url = components?.url else { return [] }
 
-        let request = buildRequest(url: url)
+        var request = buildRequest(url: url)
+        if forceRefresh {
+            configureExplicitRefresh(&request)
+        }
         let (data, response) = try await URLSession.shared.data(for: request)
 
         if let httpResponse = response as? HTTPURLResponse {
-            print("[Zhihu] Hot list response status: \(httpResponse.statusCode)")
+            AppLogger.debug("[Zhihu] Hot list response status: \(httpResponse.statusCode)")
         }
 
-        // Debug: log raw response snippet
-        if let jsonStr = String(data: data, encoding: .utf8) {
-            let preview = String(jsonStr.prefix(500))
-            print("[Zhihu] Hot list raw response (first 500 chars): \(preview)")
-        }
+        AppLogger.debug("[Zhihu] Hot list raw response received: \(data.count) bytes")
 
         let decoder = JSONDecoder()
 
@@ -856,16 +916,16 @@ class ZhihuService: ForumService {
         do {
             hotListResponse = try decoder.decode(ZhihuHotListResponse.self, from: data)
         } catch {
-            print("[Zhihu] Failed to decode hot list response: \(error)")
+            AppLogger.debug("[Zhihu] Failed to decode hot list response: \(error)")
             return []
         }
 
         let items = hotListResponse.data ?? []
-        print("[Zhihu] Hot list decoded \(items.count) items")
+        AppLogger.debug("[Zhihu] Hot list decoded \(items.count) items")
 
         return items.enumerated().compactMap { (index, item) -> Thread? in
             guard let target = item.target else {
-                print("[Zhihu] Hot item #\(index): no target, skipped")
+                AppLogger.debug("[Zhihu] Hot item #\(index): no target, skipped")
                 return nil
             }
 
@@ -879,7 +939,7 @@ class ZhihuService: ForumService {
 
             let threadId = "question_\(questionId)"
             let title = target.titleArea?.text ?? "Untitled"
-            print("[Zhihu] Hot item #\(index): id=\(threadId), title=\(String(title.prefix(30)))")
+            AppLogger.debug("[Zhihu] Hot item #\(index): id=\(threadId), title=\(String(title.prefix(30)))")
 
             // Use excerpt_area.text or first child's excerpt
             let excerpt = target.excerptArea?.text ?? item.children?.first?.excerpt ?? ""
@@ -917,7 +977,7 @@ class ZhihuService: ForumService {
             throw NSError(domain: "ZhihuService", code: -1)
         }
 
-        print("[Zhihu] Fetching answer detail: \(answerId)")
+        AppLogger.debug("[Zhihu] Fetching answer detail: \(answerId)")
         var answer: ZhihuAnswerDetail?
         var contentText = ""
         var attempts = 0
@@ -926,7 +986,7 @@ class ZhihuService: ForumService {
         // Retry up to 3 times if content is empty
         while attempts < maxAttempts {
             attempts += 1
-            print("[Zhihu] Answer detail fetch attempt \(attempts)/\(maxAttempts)")
+            AppLogger.debug("[Zhihu] Answer detail fetch attempt \(attempts)/\(maxAttempts)")
             
             let request = buildRequest(url: url)
             let (data, _) = try await URLSession.shared.data(for: request)
@@ -939,10 +999,10 @@ class ZhihuService: ForumService {
             contentText = fetchedAnswer.content ?? fetchedAnswer.htmlContent ?? fetchedAnswer.excerpt ?? ""
             
             if !contentText.isEmpty {
-                print("[Zhihu] Successfully fetched content on attempt \(attempts)")
+                AppLogger.debug("[Zhihu] Successfully fetched content on attempt \(attempts)")
                 break
             } else if attempts < maxAttempts {
-                print("[Zhihu] Empty content on attempt \(attempts), retrying...")
+                AppLogger.debug("[Zhihu] Empty content on attempt \(attempts), retrying...")
                 // Small delay before retry to avoid rate limiting
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             }
@@ -953,7 +1013,7 @@ class ZhihuService: ForumService {
         }
 
         if contentText.isEmpty {
-            print("[Zhihu] WARNING: Empty content for answer \(answerId) after \(maxAttempts) attempts - content: \(answer.content == nil ? "nil" : "empty"), html_content: \(answer.htmlContent == nil ? "nil" : "empty"), excerpt: \(answer.excerpt == nil ? "nil" : "empty")")
+            AppLogger.debug("[Zhihu] WARNING: Empty content for answer \(answerId) after \(maxAttempts) attempts - content: \(answer.content == nil ? "nil" : "empty"), html_content: \(answer.htmlContent == nil ? "nil" : "empty"), excerpt: \(answer.excerpt == nil ? "nil" : "empty")")
         }
 
         // Create Thread from answer detail
@@ -986,7 +1046,7 @@ class ZhihuService: ForumService {
             throw NSError(domain: "ZhihuService", code: -1)
         }
 
-        print("[Zhihu] Fetching article detail: \(articleId)")
+        AppLogger.debug("[Zhihu] Fetching article detail: \(articleId)")
         var article: ZhihuArticleDetail?
         var contentText = ""
         var attempts = 0
@@ -995,7 +1055,7 @@ class ZhihuService: ForumService {
         // Retry up to 3 times if content is empty
         while attempts < maxAttempts {
             attempts += 1
-            print("[Zhihu] Article detail fetch attempt \(attempts)/\(maxAttempts)")
+            AppLogger.debug("[Zhihu] Article detail fetch attempt \(attempts)/\(maxAttempts)")
             
             let request = buildRequest(url: url)
             let (data, _) = try await URLSession.shared.data(for: request)
@@ -1008,10 +1068,10 @@ class ZhihuService: ForumService {
             contentText = fetchedArticle.content ?? fetchedArticle.htmlContent ?? fetchedArticle.excerpt ?? ""
             
             if !contentText.isEmpty {
-                print("[Zhihu] Successfully fetched content on attempt \(attempts)")
+                AppLogger.debug("[Zhihu] Successfully fetched content on attempt \(attempts)")
                 break
             } else if attempts < maxAttempts {
-                print("[Zhihu] Empty content on attempt \(attempts), retrying...")
+                AppLogger.debug("[Zhihu] Empty content on attempt \(attempts), retrying...")
                 // Small delay before retry to avoid rate limiting
                 try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
             }
@@ -1022,7 +1082,7 @@ class ZhihuService: ForumService {
         }
 
         if contentText.isEmpty {
-            print("[Zhihu] WARNING: Empty content for article \(articleId) after \(maxAttempts) attempts - content: \(article.content == nil ? "nil" : "empty"), html_content: \(article.htmlContent == nil ? "nil" : "empty"), excerpt: \(article.excerpt == nil ? "nil" : "empty")")
+            AppLogger.debug("[Zhihu] WARNING: Empty content for article \(articleId) after \(maxAttempts) attempts - content: \(article.content == nil ? "nil" : "empty"), html_content: \(article.htmlContent == nil ? "nil" : "empty"), excerpt: \(article.excerpt == nil ? "nil" : "empty")")
         }
 
         let thread = Thread(
@@ -1047,7 +1107,7 @@ class ZhihuService: ForumService {
     }
 
     private func fetchQuestionDetail(questionId: String, page: Int) async throws -> (Thread, [Comment], Int?) {
-        print("[Zhihu] Fetching question detail: \(questionId)")
+        AppLogger.debug("[Zhihu] Fetching question detail: \(questionId)")
 
         var title = "问题"
         var detail = ""
@@ -1065,7 +1125,7 @@ class ZhihuService: ForumService {
             let request = buildRequest(url: url)
             if let (data, response) = try? await URLSession.shared.data(for: request) {
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                print("[Zhihu] Question detail v4 response status: \(statusCode)")
+                AppLogger.debug("[Zhihu] Question detail v4 response status: \(statusCode)")
 
                 if statusCode == 200,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -1080,9 +1140,9 @@ class ZhihuService: ForumService {
                     authorId = authorInfo?["id"] as? String ?? ""
                     authorHeadline = authorInfo?["headline"] as? String
                     apiSuccess = true
-                    print("[Zhihu] Question v4 API success: title='\(title)'")
+                    AppLogger.debug("[Zhihu] Question v4 API success: title='\(title)'")
                 } else {
-                    print("[Zhihu] Question v4 API failed (status \(statusCode)), trying cache fallback")
+                    AppLogger.debug("[Zhihu] Question v4 API failed (status \(statusCode)), trying cache fallback")
                 }
             }
         }
@@ -1091,7 +1151,7 @@ class ZhihuService: ForumService {
         if !apiSuccess, let cached = questionDataCache[questionId] {
             title = cached.title
             detail = cached.excerpt
-            print("[Zhihu] Using cached question data: title='\(title)'")
+            AppLogger.debug("[Zhihu] Using cached question data: title='\(title)'")
         }
 
         let thread = Thread(
@@ -1212,7 +1272,7 @@ class ZhihuService: ForumService {
         return feedItems.compactMap { item -> Thread? in
             // Skip advertisements
             guard item.type != "feed_advert" else {
-                print("[Zhihu] Filtered out ad")
+                AppLogger.debug("[Zhihu] Filtered out ad")
                 return nil
             }
 
@@ -1227,19 +1287,19 @@ class ZhihuService: ForumService {
 
             // Skip downvoted items
             if isDownvoted(targetId: target.id) {
-                print("[Zhihu] Excluded downvoted item: \(target.id ?? 0)")
+                AppLogger.debug("[Zhihu] Excluded downvoted item: \(target.id ?? 0)")
                 return nil
             }
 
             // Skip read/not-interested posts
             if let targetId = target.id, filteredPostIds.contains(String(targetId)) {
-                print("[Zhihu] Excluded filtered post: \(targetId)")
+                AppLogger.debug("[Zhihu] Excluded filtered post: \(targetId)")
                 return nil
             }
 
             // Apply quality filter (from zhihu-plus-plus logic)
             if let reason = target.filterReason() {
-                print("[Zhihu] Filtered: \(reason)")
+                AppLogger.debug("[Zhihu] Filtered: \(reason)")
                 return nil
             }
 
@@ -1294,11 +1354,11 @@ class ZhihuService: ForumService {
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
                 let decoder = JSONDecoder()
                 let me = try decoder.decode(ZhihuMeResponse.self, from: data)
-                print("[Zhihu] Logged in as: \(me.name ?? "unknown")")
+                AppLogger.debug("[Zhihu] Logged in as: \(me.name ?? "unknown")")
                 return me
             }
         } catch {
-            print("[Zhihu] Login verification failed: \(error)")
+            AppLogger.debug("[Zhihu] Login verification failed: \(error)")
         }
         return nil
     }
