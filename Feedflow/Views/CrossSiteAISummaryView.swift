@@ -86,13 +86,14 @@ struct CrossSiteAISummaryView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(section.posts) { post in
-                        Link(destination: URL(string: post.url)!) {
+                        NavigationLink(destination: ThreadDetailView(thread: post.thread, service: post.makeService(), contextThreads: section.contextThreads)) {
                             Text(post.title)
                                 .font(.footnote)
                                 .foregroundColor(.forumAccent)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
             }
@@ -185,11 +186,13 @@ final class CrossSiteAISummaryViewModel: ObservableObject {
 
             let threads = try await service.fetchCategoryThreads(categoryId: selectedCommunity.id, communities: communities, page: 1)
             let topThreads = Array(threads.prefix(10))
-            let posts = topThreads.compactMap { thread -> CrossSitePostLink? in
-                let url = service.getWebURL(for: thread)
-                guard !url.isEmpty, URL(string: url) != nil else { return nil }
+            let posts = topThreads.map { thread -> CrossSitePostLink in
                 let trimmedTitle = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                return CrossSitePostLink(title: trimmedTitle.isEmpty ? url : trimmedTitle, url: url)
+                return CrossSitePostLink(
+                    title: trimmedTitle.isEmpty ? "Untitled thread" : trimmedTitle,
+                    thread: thread,
+                    serviceId: service.id
+                )
             }
 
             if posts.isEmpty {
@@ -239,10 +242,34 @@ struct CrossSiteSection: Identifiable {
     var posts: [CrossSitePostLink] = []
     var isLoading = false
     var error: String?
+
+    var contextThreads: [Thread] {
+        posts.map(\.thread)
+    }
 }
 
 struct CrossSitePostLink: Identifiable {
     let id = UUID()
     let title: String
-    let url: String
+    let thread: Thread
+    let serviceId: String
+
+    func makeService() -> ForumService {
+        switch serviceId {
+        case "hackernews":
+            return HackerNewsService()
+        case "v2ex":
+            return V2EXService()
+        case "linux_do":
+            return DiscourseService()
+        case "4d4y":
+            return FourD4YService()
+        case "zhihu":
+            return ZhihuService()
+        case "rss":
+            return RSSService()
+        default:
+            return FourD4YService()
+        }
+    }
 }

@@ -21,9 +21,7 @@ struct ThreadListView: View {
             Color.forumBackground.ignoresSafeArea()
 
             if viewModel.isLoading && viewModel.threads.isEmpty {
-                ProgressView()
-                    .tint(.forumAccent)
-                    .scaleEffect(1.5)
+                ThreadListLoadingView(serviceName: service.name, communityName: community.name)
             } else {
                 ScrollViewReader { scrollProxy in
                     ScrollView {
@@ -35,39 +33,51 @@ struct ThreadListView: View {
                         }
                         .frame(height: 0)
 
-                        LazyVStack(spacing: 10) {
-                            ForEach(viewModel.threads) { thread in
-                                NavigationLink(destination: ThreadDetailView(thread: thread, service: service, contextThreads: viewModel.threads)) {
-                                    ThreadRow(thread: thread)
-                                        .onAppear {
-                                            viewModel.prefetchThread(thread: thread)
-                                            if thread == viewModel.threads.last {
-                                                Task { await viewModel.loadMoreTopics(for: community) }
-                                            }
-                                        }
-                                        .onDisappear {
-                                            viewModel.cancelPrefetch(threadId: thread.id)
-                                        }
+                        LazyVStack(spacing: 8) {
+                            ThreadListStatusHeader(
+                                service: service,
+                                community: community,
+                                visibleCount: viewModel.threads.count,
+                                isRefreshing: viewModel.isLoading
+                            )
+                            .padding(.bottom, 2)
+
+                            if viewModel.threads.isEmpty {
+                                ThreadListEmptyView(serviceName: service.name, communityName: community.name) {
+                                    _ = startManualRefresh()
                                 }
-                                .buttonStyle(PlainButtonStyle())
-                                .if(service is ZhihuService) { view in
-                                    view.contextMenu {
-                                        Button(role: .destructive) {
-                                            Task {
-                                                // Remove from UI immediately
-                                                await MainActor.run {
-                                                    withAnimation {
-                                                        viewModel.removeThread(thread)
+                            } else {
+                                ForEach(viewModel.threads) { thread in
+                                    NavigationLink(destination: ThreadDetailView(thread: thread, service: service, contextThreads: viewModel.threads)) {
+                                        ThreadRow(thread: thread, service: service)
+                                            .onAppear {
+                                                viewModel.prefetchThread(thread: thread)
+                                                if thread == viewModel.threads.last {
+                                                    Task { await viewModel.loadMoreTopics(for: community) }
+                                                }
+                                            }
+                                            .onDisappear {
+                                                viewModel.cancelPrefetch(threadId: thread.id)
+                                            }
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    .if(service is ZhihuService) { view in
+                                        view.contextMenu {
+                                            Button(role: .destructive) {
+                                                Task {
+                                                    await MainActor.run {
+                                                        withAnimation {
+                                                            viewModel.removeThread(thread)
+                                                        }
+                                                    }
+                                                    if let zhihuService = service as? ZhihuService,
+                                                       let feedItem = zhihuService.getFeedItem(for: thread.id) {
+                                                        await zhihuService.downvoteItem(feedItem: feedItem)
                                                     }
                                                 }
-                                                // Also send downvote API call if possible
-                                                if let zhihuService = service as? ZhihuService,
-                                                   let feedItem = zhihuService.getFeedItem(for: thread.id) {
-                                                    await zhihuService.downvoteItem(feedItem: feedItem)
-                                                }
+                                            } label: {
+                                                Label("不感兴趣", systemImage: "hand.thumbsdown")
                                             }
-                                        } label: {
-                                            Label("不感兴趣", systemImage: "hand.thumbsdown")
                                         }
                                     }
                                 }
@@ -211,77 +221,228 @@ struct ScrollOffsetPreferenceKey: PreferenceKey {
     }
 }
 
-struct ThreadRow: View {
-    let thread: Thread
+private struct ThreadListStatusHeader: View {
+    let service: ForumService
+    let community: Community
+    let visibleCount: Int
+    let isRefreshing: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                SiteIcon(service: service, size: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(community.name)
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundColor(.forumTextPrimary)
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.forumTextSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if isRefreshing {
+                    ProgressView()
+                        .tint(.forumAccent)
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.forumTextSecondary.opacity(0.75))
+                }
+            }
+
+            HStack(spacing: 8) {
+                ThreadStateChip(text: "\(visibleCount) visible", color: .forumAccent)
+
+                if service.id == "zhihu" && community.id == "recommend" {
+                    ThreadStateChip(text: "read hidden", color: .green)
+                    ThreadStateChip(text: "fetches to 10", color: .orange)
+                } else if service.requiresLogin {
+                    ThreadStateChip(text: "session checked", color: .green)
+                } else {
+                    ThreadStateChip(text: "public source", color: .purple)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(Color.forumCard.opacity(0.82))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.65), lineWidth: 1)
+        )
+    }
+
+    private var subtitle: String {
+        if service.id == "zhihu" && community.id == "recommend" {
+            return "\(service.name) · recommendations"
+        }
+
+        return "\(service.name) · \(community.category)"
+    }
+}
+
+private struct ThreadListLoadingView: View {
+    let serviceName: String
+    let communityName: String
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .tint(.forumAccent)
+                .scaleEffect(1.18)
+
+            VStack(spacing: 4) {
+                Text("Loading \(communityName)")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.forumTextPrimary)
+                    .lineLimit(1)
+
+                Text("Checking \(serviceName) and preparing threads")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.forumTextSecondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 280)
+        .background(Color.forumCard)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.65), lineWidth: 1)
+        )
+    }
+}
+
+private struct ThreadListEmptyView: View {
+    let serviceName: String
+    let communityName: String
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            FeedflowSymbol(
+                name: "tray",
+                size: 24,
+                color: .forumTextSecondary,
+                background: .forumInputBackground.opacity(0.75),
+                frameSize: 54,
+                shape: .circle
+            )
+
+            VStack(spacing: 4) {
+                Text("No visible threads")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.forumTextPrimary)
+
+                Text("\(serviceName) returned no visible posts for \(communityName).")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.forumTextSecondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+
+            Button(action: retry) {
+                Label("Refresh", systemImage: FeedflowIcon.refresh)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.forumAccent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.forumAccentSoft)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(22)
+        .background(Color.forumCard)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.65), lineWidth: 1)
+        )
+    }
+}
+
+struct ThreadRow: View {
+    let thread: Thread
+    let service: ForumService
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            badgeRow
 
             Text(thread.title)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.forumTextPrimary)
-                .lineLimit(3)
+                .lineLimit(2)
                 .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
 
             if let excerpt {
                 Text(excerpt)
-                    .font(.subheadline)
+                    .font(.system(size: 13, weight: .regular))
                     .foregroundColor(.forumTextSecondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             footer
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 12)
         .background(Color.forumCard)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.forumSeparator.opacity(0.55), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.62), lineWidth: 1)
         )
     }
 
-    private var header: some View {
-        HStack(spacing: 9) {
-            if isRSS {
-                FeedflowSymbol(
-                    name: FeedflowIcon.feed,
-                    size: 13,
-                    color: .forumAccent,
-                    background: .forumAccentSoft,
-                    frameSize: 28,
-                    shape: .circle
-                )
-            } else {
-                AvatarView(urlOrName: thread.author.avatar, size: 28, fallbackText: thread.author.username)
-            }
+    private var badgeRow: some View {
+        HStack(spacing: 6) {
+            ThreadSourceBadge(text: sourceName, color: sourceColor, filled: true)
+            ThreadSourceBadge(text: categoryName, color: .forumTextSecondary, filled: false)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(primaryMetadata)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.forumTextPrimary)
-                    .lineLimit(1)
-
-                Text(secondaryMetadata)
-                    .font(.caption2)
-                    .foregroundColor(.forumTextSecondary)
-                    .lineLimit(1)
+            if let firstTag = displayTags.first {
+                ThreadSourceBadge(text: firstTag, color: tagColor(firstTag), filled: false)
             }
 
             Spacer(minLength: 8)
 
-            if let firstTag = displayTags.first {
-                ThreadTagChip(text: firstTag, color: tagColor(firstTag))
+            if isLikelyFresh {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+                    .accessibilityLabel("Fresh thread")
             }
         }
     }
 
     private var footer: some View {
         HStack(spacing: 8) {
+            if !isRSS {
+                AvatarView(urlOrName: thread.author.avatar, size: 20, fallbackText: thread.author.username)
+            }
+
+            Text(metadata)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.forumTextSecondary)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
             if thread.likeCount > 0 {
                 ThreadMetricPill(icon: "hand.thumbsup", text: "\(thread.likeCount)")
             }
@@ -289,42 +450,71 @@ struct ThreadRow: View {
             if !isRSS {
                 ThreadMetricPill(icon: FeedflowIcon.comments, text: "\(thread.commentCount)")
             }
-
-            if displayTags.count > 1 {
-                ForEach(displayTags.dropFirst().prefix(2), id: \.self) { tag in
-                    ThreadTagChip(text: tag, color: tagColor(tag))
-                }
-            }
-
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.forumTextSecondary.opacity(0.55))
         }
     }
 
+    private var sourceName: String {
+        switch service.id {
+        case "zhihu": return "知乎"
+        case "linux_do": return "linux.do"
+        case "4d4y": return "4D4Y"
+        case "v2ex": return "V2EX"
+        case "hackernews": return "HN"
+        case "rss": return "RSS"
+        default: return service.name
+        }
+    }
+
+    private var categoryName: String {
+        if service.id == "zhihu" && thread.community.id == "recommend" {
+            return "Recommend"
+        }
+
+        return thread.community.name.isEmpty ? thread.community.category : thread.community.name
+    }
+
+    private var metadata: String {
+        if isRSS {
+            return "\(thread.community.name) · \(thread.timeAgo)"
+        }
+
+        if service.id == "4d4y" {
+            return "\(thread.author.username) · \(thread.timeAgo)"
+        }
+
+        return "@\(thread.author.username) · \(thread.timeAgo)"
+    }
+
     private var isRSS: Bool {
-        thread.community.category == "RSS"
+        service.id == "rss" || thread.community.category == "RSS"
     }
 
-    private var primaryMetadata: String {
-        isRSS ? thread.community.name : "@\(thread.author.username)"
-    }
-
-    private var secondaryMetadata: String {
-        isRSS ? thread.timeAgo : "\(thread.community.name) · \(thread.timeAgo)"
+    private var isLikelyFresh: Bool {
+        let lower = thread.timeAgo.lowercased()
+        return lower.contains("m") || lower.contains("minute") || lower.contains("分钟") || lower.contains("刚刚")
     }
 
     private var excerpt: String? {
         let trimmed = thread.content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        return (thread.community.category == "zhihu" || isRSS) ? trimmed : nil
+        return (service.id == "zhihu" || isRSS || service.id == "v2ex") ? trimmed : nil
     }
 
     private var displayTags: [String] {
-        guard thread.community.category == "zhihu" else { return [] }
+        guard service.id == "zhihu" else { return [] }
         return thread.tags ?? []
+    }
+
+    private var sourceColor: Color {
+        switch service.id {
+        case "zhihu": return .blue
+        case "linux_do": return .green
+        case "4d4y": return .orange
+        case "v2ex": return .purple
+        case "hackernews": return .orange
+        case "rss": return .teal
+        default: return .forumAccent
+        }
     }
 
     private func tagColor(_ tag: String) -> Color {
@@ -336,6 +526,40 @@ struct ThreadRow: View {
         case "想法": return .pink
         default: return .forumTextSecondary
         }
+    }
+}
+
+private struct ThreadSourceBadge: View {
+    let text: String
+    let color: Color
+    let filled: Bool
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .bold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .foregroundColor(filled ? .white : color)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(filled ? color : Color.forumInputBackground.opacity(0.72))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    }
+}
+
+private struct ThreadStateChip: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .foregroundColor(color)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(color.opacity(0.13))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 
@@ -352,10 +576,10 @@ private struct ThreadMetricPill: View {
         .font(.caption2)
         .fontWeight(.medium)
         .foregroundColor(.forumTextSecondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 7)
+        .frame(height: 22)
         .background(Color.forumInputBackground.opacity(0.7))
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 

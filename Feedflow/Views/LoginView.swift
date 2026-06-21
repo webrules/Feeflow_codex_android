@@ -62,7 +62,7 @@ struct LoginView: View {
                         return baseConfig
                     }()
                     WebLoginSheetView(config: effectiveConfig) { cookies in
-                        handleLoginSuccess(site: selectedSite, cookies: cookies)
+                        await handleLoginSuccess(site: selectedSite, cookies: cookies)
                     }
                 }
             }
@@ -309,7 +309,7 @@ struct LoginView: View {
 
     // MARK: - Actions
 
-    private func handleLoginSuccess(site: ForumSite, cookies: [HTTPCookie]) {
+    private func handleLoginSuccess(site: ForumSite, cookies: [HTTPCookie]) async -> Bool {
         let siteId = site.makeService().id  // Use service ID, not enum rawValue
 
         // Filter to only save cookies for the relevant domain
@@ -325,13 +325,13 @@ struct LoginView: View {
         guard !relevantCookies.isEmpty else {
             AppLogger.debug("[Login] No relevant cookies found for \(siteId); leaving existing session unchanged.")
             loginStatus[siteId] = false
-            return
+            return false
         }
 
         guard isAuthenticatedCookieSet(site: site, cookies: relevantCookies) else {
             AppLogger.debug("[Login] Cookie set for \(siteId) is missing an authentication cookie; leaving existing session unchanged.")
             loginStatus[siteId] = DatabaseManager.shared.hasCookies(siteId: siteId)
-            return
+            return false
         }
 
         // Critical check for Zhihu authentication token
@@ -356,34 +356,31 @@ struct LoginView: View {
 
         replaceRuntimeCookies(domainFilter: domainFilter, cookies: persistentCookies)
 
-        // Verify the session is actually usable by calling restoreSession.
-        // Don't set loginStatus to false first — just let the async verification update it.
+        let sessionValid = await site.makeService().restoreSession()
+        loginStatus[siteId] = sessionValid
+
+        if !sessionValid {
+            AppLogger.debug("[Login] WARNING: Session verification FAILED after login for \(siteId)")
+            isCompletingLogin = false
+            return false
+        }
+
+        guard !isCompletingLogin else { return true }
+        isCompletingLogin = true
+
+        // Auto-close login flows and navigate to selected site's categories.
+        showWebLogin = false
+        dismiss()
+
         Task {
-            let sessionValid = await site.makeService().restoreSession()
+            try? await Task.sleep(nanoseconds: 250_000_000)
             await MainActor.run {
-                loginStatus[siteId] = sessionValid
-                if !sessionValid {
-                    AppLogger.debug("[Login] WARNING: Session verification FAILED after login for \(siteId)")
-                    isCompletingLogin = false
-                    return
-                }
-
-                guard !isCompletingLogin else { return }
-                isCompletingLogin = true
-
-                // Auto-close login flows and navigate to selected site's categories.
-                showWebLogin = false
-                dismiss()
-
-                Task {
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                    await MainActor.run {
-                        navigationManager.popToRoot()
-                        navigationManager.path.append(site)
-                    }
-                }
+                navigationManager.popToRoot()
+                navigationManager.path.append(site)
             }
         }
+
+        return true
     }
 
     private func siteDomain(_ site: ForumSite) -> String {
@@ -399,24 +396,15 @@ struct LoginView: View {
 
     private func isAuthenticatedCookieSet(site: ForumSite, cookies: [HTTPCookie]) -> Bool {
         switch site {
-        case .fourD4Y:
-            // 4D4Y/Discuz deployments use site-specific cookie prefixes, so
-            // validate the saved session by fetching the forum instead of
-            // rejecting otherwise valid cookies by name here.
-            return !cookies.isEmpty
         case .zhihu:
             return cookies.contains { $0.name == "z_c0" }
-        case .linuxDo:
-            return cookies.contains { cookie in
-                let name = cookie.name.lowercased()
-                return name.contains("_t") || name.contains("remember_user_token")
-            }
-        case .hackerNews:
-            return cookies.contains { $0.name.lowercased().contains("user") }
-        case .v2ex:
-            return cookies.contains { $0.name.lowercased().contains("a2") }
         case .rss:
             return true
+        default:
+            // Cookie names are not a stable authentication contract across
+            // deployments and OAuth providers. Each service validates the
+            // session against its own authenticated endpoint before keeping it.
+            return !cookies.isEmpty
         }
     }
 

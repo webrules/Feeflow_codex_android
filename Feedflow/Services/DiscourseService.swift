@@ -19,23 +19,23 @@ class DiscourseService: ForumService {
     }
 
     func restoreSession() async -> Bool {
-        let savedCookies = linuxCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
+        let savedCookies = uniqueCookies(linuxCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? []))
 
         if !savedCookies.isEmpty {
-            syncCookies(savedCookies)
-            if await validateSession() {
+            if await validateSession(cookies: savedCookies) {
+                DatabaseManager.shared.replaceCookies(siteId: id, cookies: savedCookies)
+                syncCookies(savedCookies)
                 return true
             }
             AppLogger.debug("[Discourse] Saved cookies did not validate; checking WKWebView cookies")
         }
 
-        let webCookies = linuxCookies(from: await webKitCookies(for: "linux.do"))
+        let webCookies = uniqueCookies(linuxCookies(from: await webKitCookies(for: "linux.do")))
         if !webCookies.isEmpty {
-            AppLogger.debug("[Discourse] Importing \(webCookies.count) Linux.do cookies from WKWebView")
-            DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
-            syncCookies(webCookies)
-
-            if await validateSession() {
+            AppLogger.debug("[Discourse] Checking \(webCookies.count) Linux.do cookies from WKWebView")
+            if await validateSession(cookies: webCookies) {
+                DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
+                syncCookies(webCookies)
                 return true
             }
         }
@@ -90,6 +90,7 @@ class DiscourseService: ForumService {
 
         var request = authorizedRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue(baseURL, forHTTPHeaderField: "Origin")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(token, forHTTPHeaderField: "X-CSRF-Token")
@@ -126,16 +127,14 @@ class DiscourseService: ForumService {
         return decoded.csrf
     }
 
-    private func authorizedRequest(url: URL) -> URLRequest {
+    private func authorizedRequest(url: URL, cookies overrideCookies: [HTTPCookie]? = nil) -> URLRequest {
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
-        request.setValue(baseURL, forHTTPHeaderField: "Origin")
         request.setValue(baseURL, forHTTPHeaderField: "Referer")
 
-        let cookies = DatabaseManager.shared.getCookies(siteId: id) ?? []
-        let relevant = cookies.filter { $0.domain.contains("linux.do") }
-        if !relevant.isEmpty {
-            request.setValue(relevant.map { "\($0.name)=\($0.value)" }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        let cookies = overrideCookies ?? (DatabaseManager.shared.getCookies(siteId: id) ?? [])
+        if let cookieHeader = cookieHeader(for: url, cookies: linuxCookies(from: cookies)) {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
             request.httpShouldHandleCookies = false
         }
 
@@ -147,9 +146,68 @@ class DiscourseService: ForumService {
     }
 
     private func syncCookies(_ cookies: [HTTPCookie]) {
-        for cookie in cookies {
+        clearSystemCookies()
+
+        for cookie in uniqueCookies(linuxCookies(from: cookies)) {
             HTTPCookieStorage.shared.setCookie(cookie)
         }
+    }
+
+    private func clearSystemCookies() {
+        let systemCookies = HTTPCookieStorage.shared.cookies ?? []
+        for cookie in systemCookies where cookie.domain.contains("linux.do") {
+            HTTPCookieStorage.shared.deleteCookie(cookie)
+        }
+    }
+
+    private func cookieHeader(for url: URL, cookies: [HTTPCookie]) -> String? {
+        guard let host = url.host?.lowercased() else { return nil }
+        let path = url.path.isEmpty ? "/" : url.path
+        let now = Date()
+
+        let matchingCookies = cookies.filter { cookie in
+            let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
+            let isExpired = cookie.expiresDate.map { $0 <= now } ?? false
+            let hostMatches = cookieDomainMatches(cookie.domain, host: host)
+            let pathMatches = path.hasPrefix(cookiePath)
+            let secureMatches = !cookie.isSecure || url.scheme?.lowercased() == "https"
+            return hostMatches && pathMatches && secureMatches && !isExpired
+        }
+
+        guard !matchingCookies.isEmpty else { return nil }
+
+        let deduped = uniqueCookies(matchingCookies).sorted {
+            if $0.path.count != $1.path.count {
+                return $0.path.count > $1.path.count
+            }
+            return $0.name < $1.name
+        }
+
+        AppLogger.debug("[Discourse] Cookie header for \(host)\(path): sending \(deduped.count)/\(cookies.count) cookies")
+        return deduped.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+    }
+
+    private func cookieDomainMatches(_ cookieDomain: String, host: String) -> Bool {
+        let normalizedDomain = cookieDomain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        return host == normalizedDomain || host.hasSuffix(".\(normalizedDomain)")
+    }
+
+    private func uniqueCookies(_ cookies: [HTTPCookie]) -> [HTTPCookie] {
+        var bestByName: [String: HTTPCookie] = [:]
+
+        for cookie in cookies {
+            if let existing = bestByName[cookie.name] {
+                let cookieScore = cookie.path.count + (cookie.domain.hasPrefix(".") ? 0 : 1)
+                let existingScore = existing.path.count + (existing.domain.hasPrefix(".") ? 0 : 1)
+                if cookieScore >= existingScore {
+                    bestByName[cookie.name] = cookie
+                }
+            } else {
+                bestByName[cookie.name] = cookie
+            }
+        }
+
+        return Array(bestByName.values)
     }
 
     @MainActor
@@ -193,20 +251,23 @@ class DiscourseService: ForumService {
         let csrf: String
     }
 
-    private func validateSession() async -> Bool {
+    private func validateSession(cookies: [HTTPCookie]? = nil) async -> Bool {
         guard let url = URL(string: "\(baseURL)/session/current.json") else {
             return false
         }
 
         do {
-            var request = authorizedRequest(url: url)
+            var request = authorizedRequest(url: url, cookies: cookies)
             request.setValue("application/json", forHTTPHeaderField: "Accept")
             let (data, response) = try await URLSession.shared.data(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode)
-            else {
-                AppLogger.debug("[Discourse] Session validation failed: session/current.json was not accessible")
+            guard let httpResponse = response as? HTTPURLResponse else {
+                AppLogger.debug("[Discourse] Session validation failed: missing HTTP response")
+                return false
+            }
+
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                AppLogger.debug("[Discourse] Session validation failed: session/current.json returned \(httpResponse.statusCode)")
                 return false
             }
 

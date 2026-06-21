@@ -79,20 +79,18 @@ class FourD4YService: ForumService {
         let savedCookies = fourD4YCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
 
         if !savedCookies.isEmpty {
-            if await validateSession(cookies: savedCookies) {
+            if await validateSession(cookies: savedCookies) || hasDiscuzAuthenticationCookie(savedCookies) {
                 syncCookies(savedCookies)
                 return true
             }
-            clearSystemCookies(forDomain: "4d4y.com")
-            DatabaseManager.shared.clearCookies(siteId: id)
-            AppLogger.debug("[4D4Y] Saved cookies did not validate as an authenticated session; cleared stale cookies, checking WKWebView")
+            AppLogger.debug("[4D4Y] Saved cookies did not pass the HTML check; preserving them while checking WKWebView")
         }
 
         let webCookies = fourD4YCookies(from: await webKitCookies(for: "4d4y.com"))
         if !webCookies.isEmpty {
             AppLogger.debug("[4D4Y] Checking \(webCookies.count) 4d4y cookies from WKWebView")
 
-            if await validateSession(cookies: webCookies) {
+            if await validateSession(cookies: webCookies) || hasDiscuzAuthenticationCookie(webCookies) {
                 DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
                 syncCookies(webCookies)
                 return true
@@ -112,6 +110,19 @@ class FourD4YService: ForumService {
 
     private func fourD4YCookies(from cookies: [HTTPCookie]) -> [HTTPCookie] {
         cookies.filter { $0.domain.contains("4d4y.com") }
+    }
+
+    private func hasDiscuzAuthenticationCookie(_ cookies: [HTTPCookie]) -> Bool {
+        let now = Date()
+        return cookies.contains { cookie in
+            guard !cookie.value.isEmpty,
+                  cookie.expiresDate.map({ $0 > now }) ?? true else {
+                return false
+            }
+
+            let name = cookie.name.lowercased()
+            return name.contains("auth") || name.contains("member")
+        }
     }
 
     private func cookieHeader(for url: URL, cookies: [HTTPCookie]) -> String? {
