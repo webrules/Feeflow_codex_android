@@ -79,7 +79,7 @@ class FourD4YService: ForumService {
         let savedCookies = fourD4YCookies(from: DatabaseManager.shared.getCookies(siteId: id) ?? [])
 
         if !savedCookies.isEmpty {
-            if await validateSession(cookies: savedCookies) || hasDiscuzAuthenticationCookie(savedCookies) {
+            if await validateSession(cookies: savedCookies) {
                 syncCookies(savedCookies)
                 return true
             }
@@ -90,7 +90,7 @@ class FourD4YService: ForumService {
         if !webCookies.isEmpty {
             AppLogger.debug("[4D4Y] Checking \(webCookies.count) 4d4y cookies from WKWebView")
 
-            if await validateSession(cookies: webCookies) || hasDiscuzAuthenticationCookie(webCookies) {
+            if await validateSession(cookies: webCookies) {
                 DatabaseManager.shared.replaceCookies(siteId: id, cookies: webCookies)
                 syncCookies(webCookies)
                 return true
@@ -340,16 +340,10 @@ class FourD4YService: ForumService {
                     self.currentSID = String(html[r])
                     AppLogger.debug("[4D4Y] Extracted SID: \(self.currentSID!)")
 
-                    // Set SID cookie on in-memory session only (don't persist to DB to avoid overwriting login cookies)
-                    if let sidCookie = HTTPCookie(properties: [
-                        .name: "cdb_sid",
-                        .value: self.currentSID!,
-                        .domain: "www.4d4y.com",
-                        .path: "/forum",
-                        .expires: Date().addingTimeInterval(86400)
-                    ]) {
-                        HTTPCookieStorage.shared.setCookie(sidCookie)
-                    }
+                    // SID is carried via URL query parameter (not cookies), so we
+                    // only store it in-memory.  Writing it to HTTPCookieStorage.shared
+                    // would race with auth-cookie writes from handleLoginSuccess /
+                    // syncCookies and could overwrite the real login session.
                 }
             }
         }
@@ -515,6 +509,20 @@ class FourD4YService: ForumService {
                 replyCount = count
             }
 
+
+            // Extract last post time and poster from <td class="lastpost">
+            var lastPostTime: String? = nil
+            var lastPosterName: String? = nil
+            if let lastpostRegex = try? NSRegularExpression(pattern: "<td\\s+class=\"lastpost\"[^>]*>.*?<cite>.*?<a[^>]*>([^<]+)</a>.*?</cite>.*?<em>[^<]*<a[^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+               let lpMatch = lastpostRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)) {
+                if let timeRange = Range(lpMatch.range(at: 1), in: rowContent) {
+                    lastPostTime = String(rowContent[timeRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                if let posterRange = Range(lpMatch.range(at: 2), in: rowContent) {
+                    lastPosterName = String(rowContent[posterRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
             // Debug first few
             if index < 3 {
                 AppLogger.debug("[4D4Y] Thread \(index): tid=\(tid), title=\(title), author=\(authorName), replies=\(replyCount)")
@@ -532,7 +540,9 @@ class FourD4YService: ForumService {
                     likeCount: 0,
                     commentCount: replyCount,
                     isLiked: false,
-                    tags: nil
+                    tags: nil,
+                    lastPostTime: lastPostTime,
+                    lastPosterName: lastPosterName
                 ))
             }
         }

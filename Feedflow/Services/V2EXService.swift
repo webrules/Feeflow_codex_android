@@ -275,6 +275,14 @@ class V2EXService: ForumService {
                     replyCount = Int(String(cell[r])) ?? 0
                 }
 
+                // Extract last reply time from topic_info: <strong>OP</strong> · <a href="...">12 分钟前</a>
+                var lastPostTime: String? = nil
+                if let topicInfoRegex = try? NSRegularExpression(pattern: "class=\"topic_info\">.*?</strong>.*?<a[^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+                   let tiMatch = topicInfoRegex.firstMatch(in: cell, options: [], range: NSRange(cell.startIndex..., in: cell)),
+                   let timeRange = Range(tiMatch.range(at: 1), in: cell) {
+                    lastPostTime = String(cell[timeRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+
                 improvedThreads.append(Thread(
                     id: id,
                     title: title,
@@ -285,7 +293,8 @@ class V2EXService: ForumService {
                     likeCount: 0,
                     commentCount: replyCount,
                     isLiked: false,
-                    tags: nil
+                    tags: nil,
+                    lastPostTime: lastPostTime
                 ))
             }
 

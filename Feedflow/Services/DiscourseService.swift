@@ -589,6 +589,19 @@ class DiscourseService: ForumService {
                 role: nil
             )
 
+                        // Extract last poster from Discourse posters array
+            let lastPosterName: String? = {
+                guard let posters = threadItem.posters, !posters.isEmpty else { return nil }
+                // Last non-OP poster, or fallback to the last poster
+                let nonOP = posters.filter { !$0.description.contains("Original") }
+                let targetId = (nonOP.last?.userId ?? posters.last?.userId) ?? 0
+                // We need userMap to resolve userId → username. Use userId as fallback.
+                if let user = userMap[targetId] {
+                    return user.username
+                }
+                return nil
+            }()
+            let lastPostTime: String? = threadItem.bumpedAt.map { calculateTimeAgo(from: $0) }
             let thread = Thread(
                 id: String(threadItem.id),
                 title: threadItem.title,
@@ -599,7 +612,9 @@ class DiscourseService: ForumService {
                 likeCount: threadItem.likeCount ?? 0,
                 commentCount: (threadItem.postsCount) - 1,
                 isLiked: false,
-                tags: threadItem.tags
+                tags: threadItem.tags,
+                lastPostTime: lastPostTime,
+                lastPosterName: lastPosterName
             )
 
             threads.append(thread)

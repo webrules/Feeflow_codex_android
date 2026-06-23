@@ -229,6 +229,10 @@ struct WebLoginView: UIViewRepresentable {
             guard let currentURL = webView.url?.absoluteString else { return }
             AppLogger.debug("[WebLogin] Finished navigation on \(config.site.makeService().id): \(currentURL)")
 
+            // Clear the rejected signature on each new navigation so that a
+            // previously-rejected cookie set does not block a fresh attempt.
+            lastRejectedCookieSignature = nil
+
             let isSuccess = config.isSuccessURL(currentURL)
             let isPostLoginNavigation = config.isPostLoginNavigation(webView.url)
 

@@ -77,6 +77,14 @@ struct AvatarView: View {
         loadedImage = nil
         didFail = false
 
+        // 1. Check cache first (memory + disk)
+        if let cached = ImageCache.shared.image(for: url) {
+            loadedImage = cached
+            didFail = false
+            return
+        }
+
+        // 2. Fetch from network, trying candidate URLs
         for candidateURL in avatarCandidateURLs(from: url) {
             var request = URLRequest(url: candidateURL)
             request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
@@ -95,6 +103,8 @@ struct AvatarView: View {
 
                 loadedImage = image
                 didFail = false
+                // 3. Store in cache (memory + disk) using the original normalized URL as key
+                ImageCache.shared.store(image: image, data: data, for: url)
                 return
             } catch {
                 continue

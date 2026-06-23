@@ -350,6 +350,10 @@ struct LoginView: View {
 
         DatabaseManager.shared.replaceCookies(siteId: siteId, cookies: persistentCookies)
 
+        // Invalidate stale topic caches so the next fetch returns logged-in content
+        // instead of showing threads that were cached during a guest session.
+        DatabaseManager.shared.clearCachedTopicsForService(siteId: siteId)
+
         // Verify cookies were persisted
         let verified = DatabaseManager.shared.getCookies(siteId: siteId) ?? []
         AppLogger.debug("[Login] Verification: \(verified.count) cookies readable from DB for \(siteId)")
@@ -401,10 +405,19 @@ struct LoginView: View {
         case .rss:
             return true
         default:
-            // Cookie names are not a stable authentication contract across
-            // deployments and OAuth providers. Each service validates the
-            // session against its own authenticated endpoint before keeping it.
-            return !cookies.isEmpty
+            // Delegate to the per-site auth-cookie-fragment check so the same
+            // definition drives both WebLoginView polling and LoginView acceptance.
+            guard let config = SiteLoginConfig.config(for: site) else {
+                return !cookies.isEmpty
+            }
+            let fragments = config.authCookieNameFragments
+            guard !fragments.isEmpty else {
+                return !cookies.isEmpty
+            }
+            return cookies.contains { cookie in
+                let name = cookie.name.lowercased()
+                return fragments.contains { name.contains($0.lowercased()) }
+            }
         }
     }
 

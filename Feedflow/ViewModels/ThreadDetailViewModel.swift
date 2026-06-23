@@ -109,7 +109,9 @@ class ThreadDetailViewModel: ObservableObject {
                 likeCount: fetchedThread.likeCount,
                 commentCount: fetchedThread.commentCount,
                 isLiked: self.thread.isLiked,
-                tags: fetchedThread.tags
+                tags: fetchedThread.tags,
+                lastPostTime: self.thread.lastPostTime,
+                lastPosterName: self.thread.lastPosterName
             )
 
             // Save to cache

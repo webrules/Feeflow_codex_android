@@ -27,6 +27,8 @@ struct Thread: Identifiable, Hashable, Codable {
     let commentCount: Int
     var isLiked: Bool = false
     var tags: [String]? = nil
+    var lastPostTime: String? = nil
+    var lastPosterName: String? = nil
 }
 
 struct Comment: Identifiable, Hashable, Codable {

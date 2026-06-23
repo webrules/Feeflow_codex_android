@@ -578,6 +578,28 @@ class DatabaseManager {
         sqlite3_finalize(statement)
     }
 
+    /// Clear all cached topic lists for a given service (e.g. after login so stale
+    /// guest-view cache doesn't mask protected content).  Cache keys are of the form
+    /// `serviceId_communityId_pageN`, so we match on `serviceId_` prefix.
+    func clearCachedTopicsForService(siteId: String) {
+        dbQueue.sync {
+            // LIKE '_' is a single-char wildcard; escape with backslash so we match
+            // a literal underscore in the cache key.
+            let sql = #"DELETE FROM cached_topics WHERE cache_key LIKE ? ESCAPE '\'"#
+            let pattern = siteId + #"\_%"#
+            var statement: OpaquePointer?
+            if sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK {
+                sqlite3_bind_text(statement, 1, (pattern as NSString).utf8String, -1, SQLITE_TRANSIENT)
+                let rc = sqlite3_step(statement)
+                let deleted = sqlite3_changes(db)
+                if rc == SQLITE_DONE, deleted > 0 {
+                    AppLogger.debug("[DB] Cleared \(deleted) cached topic rows for service '\(siteId)'")
+                }
+            }
+            sqlite3_finalize(statement)
+        }
+    }
+
     func saveCachedTopics(cacheKey: String, topics: [Thread]) {
         dbQueue.sync {
             guard let jsonData = try? JSONEncoder().encode(topics),

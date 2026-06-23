@@ -21,6 +21,9 @@ class ThreadListViewModel: ObservableObject {
     private var pendingPrefetches: [String: Task<Void, Never>] = [:]
     private let maxPrefetchQueueSize = 5
 
+    /// Debounce task for scroll-position updates — prevents firing on every frame.
+    private var scrollDebounceTask: Task<Void, Never>?
+
     static let backgroundPrefetchEnabledKey = "background_prefetch_enabled"
 
     private var isBackgroundPrefetchEnabled: Bool {
@@ -28,7 +31,7 @@ class ThreadListViewModel: ObservableObject {
     }
 
     private var serviceAllowsBackgroundPrefetch: Bool {
-        ["hackernews", "rss"].contains(service.id)
+        ["hackernews", "rss", "4d4y", "v2ex", "linux_do", "zhihu"].contains(service.id)
     }
 
     var allowsConfiguredBackgroundPrefetch: Bool {
@@ -82,14 +85,21 @@ class ThreadListViewModel: ObservableObject {
                     if service.id == "4d4y" {
                         needsLogin = true
                     }
-                    showRefreshMessage("Refresh returned no data. Kept existing posts.")
+                    // An explicit refresh that returns empty is a strong signal
+                    // that the session has expired and the server is silently
+                    // rejecting the request behind login-gated content.
+                    if service.id == "4d4y" || service.requiresLogin {
+                        showRefreshMessage("Session may have expired. Login to refresh content.")
+                    } else {
+                        showRefreshMessage("Refresh returned no data. Kept existing posts.")
+                    }
                     // Small delay to ensure UI updates propagate to refreshable modifier
                     try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
                     return
                 }
 
                 DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: newThreads)
-                self.threads = newThreads
+                mergeThreadsWithDiff(newThreads)
                 self.canLoadMore = !newThreads.isEmpty
                 self.currentPage = 1
                 if !newThreads.isEmpty && !hasChanges(old: previousThreads, new: newThreads) {
@@ -160,7 +170,7 @@ class ThreadListViewModel: ObservableObject {
 
             // Only update UI if user is still at top and data has changed
             if isAtTop && hasChanges(old: self.threads, new: newThreads) {
-                self.threads = newThreads
+                mergeThreadsWithDiff(newThreads)
                 self.canLoadMore = !newThreads.isEmpty
 
             }
@@ -208,6 +218,24 @@ class ThreadListViewModel: ObservableObject {
         return false
     }
 
+    /// Merge freshly-fetched threads into the displayed list using per-item
+    /// mutations so SwiftUI animates only changed rows via `Identifiable` diffing.
+    private func mergeThreadsWithDiff(_ newThreads: [Thread]) {
+        let oldIDs = threads.map(\.id)
+        let newIDs = newThreads.map(\.id)
+
+        // Nothing changed — skip the animation pass entirely.
+        guard oldIDs != newIDs else {
+            // Still assign in case thread properties (title, counts) changed.
+            threads = newThreads
+            return
+        }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            threads = newThreads
+        }
+    }
+
     func loadMoreTopics(for community: Community) async {
         guard !isLoading, canLoadMore else { return }
         isLoading = true
@@ -233,7 +261,23 @@ class ThreadListViewModel: ObservableObject {
     }
 
     func updateScrollPosition(isAtTop: Bool) {
-        self.isAtTop = isAtTop
+        // Immediately set to true when reaching the top — needed for timely
+        // background-refresh gating and pull-to-refresh UX.
+        if isAtTop {
+            scrollDebounceTask?.cancel()
+            if !self.isAtTop { self.isAtTop = true }
+            return
+        }
+
+        // Debounce leaving the top: don't flip `isAtTop` to false on every
+        // frame during a fast scroll. Wait 100 ms for the scroll to settle.
+        guard self.isAtTop else { return }
+        scrollDebounceTask?.cancel()
+        scrollDebounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100 ms
+            guard !Task.isCancelled, let self else { return }
+            self.isAtTop = false
+        }
     }
 
     /// Remove a thread from the displayed list (e.g., after downvoting)
@@ -310,7 +354,9 @@ class ThreadListViewModel: ObservableObject {
                         likeCount: thread.likeCount,
                         commentCount: thread.commentCount,
                         isLiked: thread.isLiked,
-                        tags: fetchedThread.tags
+                        tags: fetchedThread.tags,
+                        lastPostTime: thread.lastPostTime,
+                        lastPosterName: thread.lastPosterName
                     )
 
                     DatabaseManager.shared.saveCachedThread(threadId: thread.id, serviceId: service.id, thread: updatedThread, comments: fetchedComments)

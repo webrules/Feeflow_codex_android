@@ -388,6 +388,22 @@ struct ThreadRow: View {
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if ["4d4y", "v2ex", "linux_do"].contains(service.id), let time = thread.lastPostTime, !time.isEmpty {
+                HStack(spacing: 4) {
+                    if let poster = thread.lastPosterName, !poster.isEmpty {
+                        Text("↳ \(poster) · \(time.replacingOccurrences(of: #"^\d{4}[-/.]"#, with: "", options: .regularExpression))")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundColor(.forumTextSecondary)
+                            .lineLimit(1)
+                    } else {
+                        Text("↳ \(time.replacingOccurrences(of: #"^\d{4}[-/.]"#, with: "", options: .regularExpression))")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundColor(.forumTextSecondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
             if let excerpt {
                 Text(excerpt)
                     .font(.system(size: 13, weight: .regular))
@@ -411,12 +427,24 @@ struct ThreadRow: View {
     }
 
     private var badgeRow: some View {
-        HStack(spacing: 6) {
-            ThreadSourceBadge(text: sourceName, color: sourceColor, filled: true)
-            ThreadSourceBadge(text: categoryName, color: .forumTextSecondary, filled: false)
+        let compact = ["4d4y", "v2ex", "linux_do"].contains(service.id)
+        return HStack(spacing: 6) {
+            if compact {
+                AvatarView(urlOrName: thread.author.avatar, size: 18, fallbackText: thread.author.username)
+                Text("\(thread.author.username) · \(thread.timeAgo)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.forumTextSecondary)
+                    .lineLimit(1)
+                if thread.commentCount > 0 {
+                    ThreadMetricPill(icon: FeedflowIcon.comments, text: "\(thread.commentCount)")
+                }
+            } else {
+                ThreadSourceBadge(text: sourceName, color: sourceColor, filled: true)
+                ThreadSourceBadge(text: categoryName, color: .forumTextSecondary, filled: false)
 
-            if let firstTag = displayTags.first {
-                ThreadSourceBadge(text: firstTag, color: tagColor(firstTag), filled: false)
+                if let firstTag = displayTags.first {
+                    ThreadSourceBadge(text: firstTag, color: tagColor(firstTag), filled: false)
+                }
             }
 
             Spacer(minLength: 8)
@@ -432,7 +460,8 @@ struct ThreadRow: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            if !isRSS {
+            let showInlineMeta = ["4d4y", "v2ex", "linux_do"].contains(service.id)
+            if !isRSS && !showInlineMeta {
                 AvatarView(urlOrName: thread.author.avatar, size: 20, fallbackText: thread.author.username)
             }
 
@@ -447,7 +476,7 @@ struct ThreadRow: View {
                 ThreadMetricPill(icon: "hand.thumbsup", text: "\(thread.likeCount)")
             }
 
-            if !isRSS {
+            if !isRSS && !showInlineMeta {
                 ThreadMetricPill(icon: FeedflowIcon.comments, text: "\(thread.commentCount)")
             }
         }
@@ -478,8 +507,9 @@ struct ThreadRow: View {
             return "\(thread.community.name) · \(thread.timeAgo)"
         }
 
-        if service.id == "4d4y" {
-            return "\(thread.author.username) · \(thread.timeAgo)"
+        let showInlineMeta = ["4d4y", "v2ex", "linux_do"].contains(service.id)
+        if showInlineMeta {
+            return ""
         }
 
         return "@\(thread.author.username) · \(thread.timeAgo)"
