@@ -68,9 +68,7 @@ struct SiteLoginConfig {
             return authCookieNameFragments.contains { normalizedName.contains($0.lowercased()) }
         }
 
-        // Cookie names differ between site versions and OAuth providers.
-        // The site API verifies every candidate session before it is accepted.
-        return hasExpectedCookie || !relevantCookies.isEmpty
+        return hasExpectedCookie
     }
 
     func isSuccessURL(_ urlString: String) -> Bool {

@@ -138,7 +138,9 @@ final class ContentBrowsingTests: XCTestCase {
         XCTAssertFalse(ThreadListViewModel(service: HackerNewsService()).allowsConfiguredBackgroundPrefetch)
         UserDefaults.standard.set(true, forKey: k)
         XCTAssertTrue(ThreadListViewModel(service: HackerNewsService()).allowsConfiguredBackgroundPrefetch)
-        XCTAssertFalse(ThreadListViewModel(service: FourD4YService()).allowsConfiguredBackgroundPrefetch)
+        // All real services are in the allowlist — verify with an id that is not listed.
+        let unknown = StubUnknownService()
+        XCTAssertFalse(ThreadListViewModel(service: unknown).allowsConfiguredBackgroundPrefetch)
     }
 }
 
@@ -512,6 +514,21 @@ private final class RefreshTrackingService: ForumService {
     func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [FeedThread] { if page == 1 { pageOneFetchCalled = true }; return [cachedThread] }
     func refreshCategoryThreads(categoryId: String, communities: [Community]) async throws -> [FeedThread] { refreshCalled = true; return [refreshedThread] }
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (FeedThread, [Comment], Int?) { (refreshedThread, [], nil) }
+    func postComment(topicId: String, categoryId: String, content: String) async throws {}
+    func createThread(categoryId: String, title: String, content: String) async throws {}
+    func getWebURL(for thread: FeedThread) -> String { "" }
+    func canCreateThread(in community: Community) -> Bool { false }
+}
+
+/// Minimal ForumService whose id is not in the background-prefetch allowlist.
+private final class StubUnknownService: ForumService {
+    var name: String { "Unknown" }
+    var id: String { "stub_unknown" }
+    var logo: String { "questionmark.circle" }
+    func restoreSession() async -> Bool { true }
+    func fetchCategories() async throws -> [Community] { [] }
+    func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [FeedThread] { [] }
+    func fetchThreadDetail(threadId: String, page: Int) async throws -> (FeedThread, [Comment], Int?) { (FeedThread(id: "1", title: "", content: "", author: User(id: "", username: "", avatar: "", role: nil), community: Community(id: "", name: "", description: "", category: "", activeToday: 0, onlineNow: 0), timeAgo: "", likeCount: 0, commentCount: 0), [], nil) }
     func postComment(topicId: String, categoryId: String, content: String) async throws {}
     func createThread(categoryId: String, title: String, content: String) async throws {}
     func getWebURL(for thread: FeedThread) -> String { "" }
