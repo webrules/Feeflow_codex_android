@@ -23,9 +23,49 @@ struct ThreadListView: View {
             if viewModel.isLoading && viewModel.threads.isEmpty {
                 ThreadListLoadingView(serviceName: service.name, communityName: community.name)
             } else {
-                ScrollViewReader { scrollProxy in
-                    ScrollView {
-                        GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    if service is ZhihuService {
+                        SearchBar(
+                            query: $viewModel.searchQuery,
+                            isSearching: viewModel.isSearching,
+                            placeholder: "搜索知乎内容",
+                            onSubmit: { viewModel.performSearch() },
+                            onClear: { viewModel.clearSearch() }
+                        )
+                        .padding(.horizontal, 13)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                    }
+
+                    if let error = viewModel.searchError {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 12))
+                                .foregroundColor(.orange)
+                            Text(error)
+                                .font(.system(size: 13))
+                                .foregroundColor(.forumTextSecondary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 6)
+                        .background(Color.forumCard.opacity(0.6))
+                        .transition(.opacity)
+                    }
+
+                    if viewModel.isSearching && viewModel.threads.isEmpty {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("搜索中...")
+                                .font(.system(size: 14))
+                                .foregroundColor(.forumTextSecondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                    }
+
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            GeometryReader { geometry in
                             Color.clear.preference(
                                 key: ScrollOffsetPreferenceKey.self,
                                 value: geometry.frame(in: .named("scroll")).minY
@@ -34,11 +74,12 @@ struct ThreadListView: View {
                         .frame(height: 0)
 
                         LazyVStack(spacing: 8) {
+                            let searchCommunity = Community(id: "search", name: "\"\(viewModel.searchQuery)\" 搜索结果", description: "", category: "zhihu", activeToday: 0, onlineNow: 0)
                             ThreadListStatusHeader(
                                 service: service,
-                                community: community,
+                                community: viewModel.isSearchActive ? searchCommunity : community,
                                 visibleCount: viewModel.threads.count,
-                                isRefreshing: viewModel.isLoading
+                                isRefreshing: viewModel.isSearchActive ? viewModel.isSearching : viewModel.isLoading
                             )
                             .padding(.bottom, 2)
 
@@ -53,7 +94,11 @@ struct ThreadListView: View {
                                             .onAppear {
                                                 viewModel.prefetchThread(thread: thread)
                                                 if thread == viewModel.threads.last {
-                                                    Task { await viewModel.loadMoreTopics(for: community) }
+                                                    if viewModel.isSearchActive {
+                                                        viewModel.loadMoreSearchResults()
+                                                    } else {
+                                                        Task { await viewModel.loadMoreTopics(for: community) }
+                                                    }
                                                 }
                                             }
                                             .onDisappear {
@@ -99,6 +144,7 @@ struct ThreadListView: View {
                     .onPreferenceChange(ScrollOffsetPreferenceKey.self) { offset in
                         // User is at top if offset is close to 0 (within 50 points)
                         viewModel.updateScrollPosition(isAtTop: offset > -50)
+                        }
                     }
                 }
             }

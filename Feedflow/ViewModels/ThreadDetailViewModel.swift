@@ -99,10 +99,26 @@ class ThreadDetailViewModel: ObservableObject {
             let (fetchedThread, fetchedComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
 
             // Merge fetched content
+            // Preserve original content/title if the API didn't return any (e.g., search results)
+            let effectiveContent: String = {
+                let fetched = fetchedThread.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !fetched.isEmpty { return fetched }
+                let current = self.thread.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !current.isEmpty { return current }
+                return fetched
+            }()
+            let effectiveTitle: String = {
+                let fetched = fetchedThread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !fetched.isEmpty && fetched != "无标题" { return fetched }
+                let current = self.thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !current.isEmpty { return current }
+                return fetched
+            }()
+
             let updatedThread = Thread(
                 id: fetchedThread.id,
-                title: fetchedThread.title,
-                content: fetchedThread.content,
+                title: effectiveTitle,
+                content: effectiveContent,
                 author: resolvedAuthor(fetched: fetchedThread.author, current: self.thread.author),
                 community: self.thread.community,
                 timeAgo: fetchedThread.timeAgo,

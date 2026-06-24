@@ -666,14 +666,14 @@ class FourD4YService: ForumService {
          // Pattern to find post blocks: Look for postauthor section followed by content
          // We'll extract username from: <td class="postauthor">...<div class="postinfo">...<a>USERNAME</a>
 
-         let postAuthors = extractPostAuthors(from: html)
+         let postAuthors = extractPostAuthorsWithRanges(from: html)
 
-         let matches = postContentMatches(in: html)
+         let matches = postContentMatchesWithRanges(in: html)
 
          var mainThread: Thread?
          var comments: [Comment] = []
 
-         for (index, match) in matches.enumerated() {
+         for (index, (match, matchRange)) in matches.enumerated() {
              guard let pidRange = Range(match.range(at: 1), in: html),
                    let contentRange = Range(match.range(at: 2), in: html) else {
                  continue
@@ -683,8 +683,20 @@ class FourD4YService: ForumService {
              let rawContent = String(html[contentRange])
              let cleanContent = self.cleanContent(rawContent)
 
-             // Get author info from extracted array, fallback to "User" if index out of bounds.
-             let author = index < postAuthors.count ? postAuthors[index] : ParsedPostAuthor(username: "User", avatar: "person.circle")
+             // Align author to content by finding the closest preceding postauthor block in the HTML.
+             // This avoids off-by-one shifts when extra postauthor elements (polls, notices)
+             // appear before the actual posts.
+             let author: ParsedPostAuthor = {
+                 var bestMatch: ParsedPostAuthor?
+                 for (candidate, candidateRange) in postAuthors {
+                     if candidateRange.location < match.range.location {
+                         bestMatch = candidate
+                     } else {
+                         break
+                     }
+                 }
+                 return bestMatch ?? ParsedPostAuthor(username: "User", avatar: "person.circle")
+             }()
              let user = User(id: "0", username: author.username, avatar: author.avatar, role: nil)
 
              // 4D4Y/Discuz specific: The first post on Page 1 is the Topic content.
@@ -764,6 +776,27 @@ class FourD4YService: ForumService {
         return []
     }
 
+    private func postContentMatchesWithRanges(in html: String) -> [(NSTextCheckingResult, NSRange)] {
+        let patterns = [
+            "class=\"t_msgfont\"[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</td>",
+            "id=\"postmessage_(\\d+)\"[^>]*class=\"t_msgfont\"[^>]*>(.*?)</td>",
+            "<td[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</td>",
+            "<div[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</div>"
+        ]
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+                continue
+            }
+            let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+            if !matches.isEmpty {
+                return matches.map { ($0, $0.range) }
+            }
+        }
+
+        return []
+    }
+
     private func extractPostAuthors(from html: String) -> [ParsedPostAuthor] {
         let blockPattern = "<td[^>]*class=\"postauthor\"[^>]*>(.*?)</td>"
         let blockRegex = try? NSRegularExpression(pattern: blockPattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
@@ -792,6 +825,38 @@ class FourD4YService: ForumService {
         return extractPostAuthorNames(from: html).map {
             ParsedPostAuthor(username: $0, avatar: "person.circle")
         }
+    }
+
+    private func extractPostAuthorsWithRanges(from html: String) -> [(ParsedPostAuthor, NSRange)] {
+        let blockPattern = "<td[^>]*class=\"postauthor\"[^>]*>(.*?)</td>"
+        let blockRegex = try? NSRegularExpression(pattern: blockPattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let blockMatches = blockRegex?.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html)) ?? []
+
+        var authors: [(ParsedPostAuthor, NSRange)] = []
+
+        for match in blockMatches {
+            guard let blockRange = Range(match.range(at: 1), in: html) else { continue }
+            let block = String(html[blockRange])
+            let username = extractPostUsername(from: block)
+            let parsedAvatar = extractAvatarURL(from: block)
+            let avatar = isGenericAvatar(parsedAvatar)
+                ? extractAvatarURLFromAuthorUid(in: block)
+                : parsedAvatar
+
+            if !username.isEmpty {
+                // Use the full match range (the entire <td class="postauthor">...</td>)
+                // so we can compare positions with post content matches
+                authors.append((ParsedPostAuthor(username: username, avatar: avatar), match.range))
+            }
+        }
+
+        if !authors.isEmpty {
+            return authors
+        }
+
+        // Fallback: extract author names without position info
+        let names = extractPostAuthorNames(from: html)
+        return names.map { (ParsedPostAuthor(username: $0, avatar: "person.circle"), NSRange(location: 0, length: 0)) }
     }
 
     private func extractPostAuthorNames(from html: String) -> [String] {
