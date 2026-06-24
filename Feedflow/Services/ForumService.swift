@@ -24,6 +24,9 @@ protocol ForumService {
     func fetchThreadDetail(threadId: String, page: Int) async throws -> (Thread, [Comment], Int?)
     func postComment(topicId: String, categoryId: String, content: String) async throws
     func createThread(categoryId: String, title: String, content: String) async throws
+
+    /// Search for threads matching a query. Returns threads and a flag indicating if more results are available.
+    func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool)
     func getWebURL(for thread: Thread) -> String
     func canCreateThread(in community: Community) -> Bool
 }
@@ -40,6 +43,10 @@ extension ForumService {
     // Default implementation optional or helper
     func getWebURL(for thread: Thread) -> String { return "" }
     func canCreateThread(in community: Community) -> Bool { supportsThreadCreation }
+
+    func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool) {
+        return ([], false)
+    }
 
     // Maintain backward compatibility for existing callers (default page 1)
     func fetchCategoryThreads(categoryId: String, communities: [Community]) async throws -> [Thread] {

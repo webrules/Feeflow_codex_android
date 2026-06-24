@@ -222,6 +222,54 @@ struct ZhihuFeedResponse: Codable {
     }
 }
 
+// MARK: - Search Response Models
+
+struct ZhihuSearchResponse: Codable {
+    let data: [ZhihuSearchItem]?
+    let paging: ZhihuPaging?
+}
+
+struct ZhihuSearchItem: Codable {
+    let type: String?           // "search_result"
+    let object: ZhihuSearchObject?
+    let highlight: ZhihuSearchHighlight?
+}
+
+struct ZhihuSearchObject: Codable {
+    let type: String?           // "answer", "article", "question"
+    let id: Int?
+    let title: String?
+    let excerpt: String?
+    let url: String?
+    let author: ZhihuAuthor?
+    let question: ZhihuQuestion?
+    let voteupCount: Int?
+    let commentCount: Int?
+    let createdTime: Int?
+    let thumbnail: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, id, title, excerpt, url, author, question, thumbnail
+        case voteupCount = "voteup_count"
+        case commentCount = "comment_count"
+        case createdTime = "created_time"
+    }
+
+    /// Effective title: prefers question title for answers, object title otherwise
+    var effectiveTitle: String {
+        if type == "answer", let qTitle = question?.title, !qTitle.isEmpty {
+            return qTitle
+        }
+        return title ?? "无标题"
+    }
+}
+
+struct ZhihuSearchHighlight: Codable {
+    let title: String?
+    let description: String?
+}
+
+
 // MARK: - Hot List Response Models
 
 /// Hot list has a different structure from recommend feed
@@ -1339,6 +1387,69 @@ class ZhihuService: ForumService {
         let parts = threadId.components(separatedBy: "_")
         guard parts.count == 2, let targetId = Int(parts[1]) else { return nil }
         return currentFeedItems.first { $0.target?.id == targetId }
+    }
+
+    // MARK: - Search
+
+    func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool) {
+        let limit = 20
+        let offset = (page - 1) * limit
+        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://www.zhihu.com/api/v4/search_v3?q=\(encodedQuery)&t=general&offset=\(offset)&limit=\(limit)") else {
+            return ([], false)
+        }
+
+        AppLogger.debug("[Zhihu] Searching: \(query) page \(page) offset \(offset)")
+
+        let request = buildRequest(url: url)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw NSError(domain: "ZhihuService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Search request failed"])
+        }
+
+        let decoder = JSONDecoder()
+        let searchResponse = try decoder.decode(ZhihuSearchResponse.self, from: data)
+
+        let items = searchResponse.data ?? []
+        let threads = convertSearchItemsToThreads(items)
+
+        let hasMore = !(searchResponse.paging?.isEnd ?? true)
+        AppLogger.debug("[Zhihu] Search returned \(threads.count) results, hasMore: \(hasMore)")
+
+        return (threads, hasMore)
+    }
+
+    private func convertSearchItemsToThreads(_ items: [ZhihuSearchItem]) -> [Thread] {
+        return items.compactMap { item -> Thread? in
+            guard let object = item.object,
+                  let objType = object.type,
+                  ["answer", "article", "question"].contains(objType) else {
+                return nil
+            }
+
+            let threadId = "\(objType)_\(object.id ?? 0)"
+            let title = object.effectiveTitle
+            let contentPreview = object.excerpt ?? ""
+            let author = object.author
+
+            return Thread(
+                id: threadId,
+                title: title,
+                content: contentPreview,
+                author: User(
+                    id: author?.id ?? "",
+                    username: author?.name ?? "匿名用户",
+                    avatar: avatarURL(from: author),
+                    role: author?.headline
+                ),
+                community: Community(id: "search", name: "搜索", description: "", category: "zhihu", activeToday: 0, onlineNow: 0),
+                timeAgo: formatTimestamp(object.createdTime),
+                likeCount: object.voteupCount ?? 0,
+                commentCount: object.commentCount ?? 0,
+                tags: [objType == "answer" ? "回答" : objType == "article" ? "文章" : "问题"]
+            )
+        }
     }
 
     // MARK: - Login Verification

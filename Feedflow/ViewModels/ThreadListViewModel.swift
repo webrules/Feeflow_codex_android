@@ -12,6 +12,15 @@ class ThreadListViewModel: ObservableObject {
     @Published var refreshMessage: String?
     @Published var needsLogin: Bool = false
 
+    // Search state
+    @Published var searchQuery: String = ""
+    @Published var isSearchActive: Bool = false
+    @Published var isSearching: Bool = false
+    @Published var searchCanLoadMore: Bool = false
+    private var searchPage = 1
+    private var searchTask: Task<Void, Never>?
+    private var savedThreads: [Thread] = []  // Saved pre-search threads for restoration
+
     private var currentPage = 1
     private let service: ForumService
     private var currentCommunity: Community?
@@ -54,6 +63,90 @@ class ThreadListViewModel: ObservableObject {
 
     func clearLoginRequest() {
         needsLogin = false
+    }
+
+    // MARK: - Search
+
+    func performSearch() {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            clearSearch()
+            return
+        }
+
+        searchTask?.cancel()
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            // Debounce 300ms
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                self.isSearching = true
+                self.isSearchActive = true
+            }
+
+            do {
+                let (results, hasMore) = try await self.service.searchThreads(query: query, page: 1)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    // Save current threads on first search activation
+                    if !self.isSearchActive {
+                        self.savedThreads = self.threads
+                    }
+                    self.threads = results
+                    self.searchPage = 1
+                    self.searchCanLoadMore = hasMore
+                    self.isSearching = false
+                }
+            } catch is CancellationError {
+                // Ignore
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.isSearching = false
+                }
+                AppLogger.debug("Search error: \(error)")
+            }
+        }
+    }
+
+    func loadMoreSearchResults() {
+        guard isSearchActive, searchCanLoadMore, !isSearching else { return }
+        let nextPage = searchPage + 1
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            await MainActor.run { self.isSearching = true }
+            do {
+                let (results, hasMore) = try await self.service.searchThreads(query: query, page: nextPage)
+                await MainActor.run {
+                    self.threads.append(contentsOf: results)
+                    self.searchPage = nextPage
+                    self.searchCanLoadMore = hasMore
+                    self.isSearching = false
+                }
+            } catch {
+                await MainActor.run { self.isSearching = false }
+                AppLogger.debug("Search pagination error: \(error)")
+            }
+        }
+    }
+
+    func clearSearch() {
+        searchTask?.cancel()
+        searchQuery = ""
+        isSearchActive = false
+        isSearching = false
+        searchCanLoadMore = false
+        searchPage = 1
+        // Restore original threads
+        if !savedThreads.isEmpty {
+            threads = savedThreads
+            savedThreads = []
+        }
     }
 
     func loadTopics(for community: Community, isReturning: Bool = false, forceRefresh: Bool = false) async {
