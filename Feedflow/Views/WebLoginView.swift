@@ -427,6 +427,7 @@ struct WebLoginSheetView: View {
     }
 
     private func saveCurrentSession() {
+        AppLogger.debug("[WebLogin] Manual save tapped for \(config.site.makeService().id)")
         WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
             let siteCookies = config.siteCookies(from: cookies)
             AppLogger.debug("[WebLogin] Manual save for \(config.site.makeService().id): \(siteCookies.count) site cookies")
@@ -449,10 +450,12 @@ struct WebLoginSheetView: View {
     private func completeSession(with cookies: [HTTPCookie], showFailure: Bool) async -> Bool {
         guard !isSavingSession else { return false }
 
+        AppLogger.debug("[WebLogin] Completing session for \(config.site.makeService().id) with \(cookies.count) cookies")
         isSavingSession = true
         sessionError = nil
 
         let isAccepted = await onSuccess(cookies)
+        AppLogger.debug("[WebLogin] Session completion result for \(config.site.makeService().id): \(isAccepted)")
         isSavingSession = false
 
         if isAccepted {

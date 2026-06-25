@@ -10,12 +10,27 @@ class FourD4YService: ForumService {
     var supportsThreadCreation: Bool { true }
 
     private let baseURL = "https://www.4d4y.com/forum"
+    private let browserUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
     private var currentSID: String?
     private var currentFormHash: String?
 
     private struct ParsedPostAuthor {
+        let userId: String
         let username: String
         let avatar: String
+
+        init(username: String, avatar: String, userId: String = "0") {
+            self.userId = userId
+            self.username = username
+            self.avatar = avatar
+        }
+    }
+
+    private struct ParsedThreadDetailPost {
+        let id: String
+        let author: ParsedPostAuthor
+        let rawContent: String
+        let timeAgo: String
     }
 
     // GBK Encoding
@@ -33,7 +48,7 @@ class FourD4YService: ForumService {
         let loginPageURL = URL(string: "\(baseURL)/logging.php?action=login")!
         var initialRequest = URLRequest(url: loginPageURL)
         initialRequest.httpMethod = "GET"
-        initialRequest.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        initialRequest.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
 
         // Perform GET to obtain any required cookies (e.g., cf_clearance)
         let (_, _) = try await URLSession.shared.data(for: initialRequest)
@@ -57,7 +72,7 @@ class FourD4YService: ForumService {
         request.httpMethod = "POST"
         request.httpBody = postBody
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
         // Include cookies from the GET request
         let cookieHeader = HTTPCookie.requestHeaderFields(with: loginPageCookies)
         request.allHTTPHeaderFields?.merge(cookieHeader) { (_, new) in new }
@@ -223,40 +238,47 @@ class FourD4YService: ForumService {
     }
 
     private func validateSession(cookies: [HTTPCookie]) async -> Bool {
-        //        guard let url = URL(string: "\(baseURL)/index.php") else {
-        guard let url = URL(string: "\(baseURL)") else {
+        guard let url = URL(string: "\(baseURL)/index.php") else {
             return false
         }
 
-        var request = URLRequest(url: url)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        AppLogger.debug("[4D4Y] Session validation started with \(cookies.count) cookies")
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
         request.httpShouldHandleCookies = false
         if let cookieHeader = cookieHeader(for: url, cookies: cookies) {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        } else {
+            AppLogger.debug("[4D4Y] Session validation has no matching cookies for \(url)")
         }
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                AppLogger.debug("[4D4Y] Session validation HTTP \(httpResponse.statusCode)")
+            }
             let html = String(data: data, encoding: gbkEncoding) ?? String(decoding: data, as: UTF8.self)
             let pattern = "href=\"forumdisplay\\.php\\?fid=(\\d+)[^\"]*\"[^>]*>([^<]+)</a>"
             let regex = try NSRegularExpression(pattern: pattern, options: .caseInsensitive)
             let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
-            // Real auth check: a logged-in user sees "退出" (logout), guest sees "登录" (login)
-            let hasLogoutLink = html.contains("action=logout") || html.contains("退出")
-            let hasLoginLink = html.contains("action=login") && !html.contains("action=logout")
-            let isLoggedIn = !matches.isEmpty && hasLogoutLink && !hasLoginLink
+            let forumNames = matches.compactMap { match -> String? in
+                guard let r = Range(match.range(at: 2), in: html) else { return nil }
+                return String(html[r]).decodingHTMLEntities().trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let lowercasedHTML = html.lowercased()
+            let hasLogoutLink = lowercasedHTML.contains("action=logout") || lowercasedHTML.contains("action%3dlogout") || html.contains("退出")
+            let hasLoginLink = (lowercasedHTML.contains("action=login") || lowercasedHTML.contains("action%3dlogin")) && !hasLogoutLink
+            let hasProtectedDiscovery = forumNames.contains { $0 == "Discovery" }
+            let isLoggedIn = !matches.isEmpty && !hasLoginLink && (hasLogoutLink || hasProtectedDiscovery)
 
             if isLoggedIn {
-                let forumNames = matches.compactMap { match -> String? in
-                    guard let r = Range(match.range(at: 2), in: html) else { return nil }
-                    return String(html[r])
-                }
-                AppLogger.debug("[4D4Y DEBUG] Session validation succeeded: forums=\(matches.count) (logout link ✓) → \(forumNames.joined(separator: ", "))")
+                AppLogger.debug("[4D4Y DEBUG] Session validation succeeded: forums=\(matches.count), logout=\(hasLogoutLink), discovery=\(hasProtectedDiscovery) → \(forumNames.joined(separator: ", "))")
                 // Extract SID/formHash from the validation response so the service
                 // instance is fully initialized for subsequent requests (e.g. posting).
                 extractSID(from: html)
             } else {
-                AppLogger.debug("[4D4Y] Session validation failed: no forumdisplay links found")
+                AppLogger.debug("[4D4Y] Session validation failed: forums=\(matches.count), logout=\(hasLogoutLink), login=\(hasLoginLink), discovery=\(hasProtectedDiscovery), length=\(html.count)")
             }
 
             return isLoggedIn
@@ -277,7 +299,7 @@ class FourD4YService: ForumService {
         let relevant = fourD4YCookies(from: savedCookies)
 
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
         request.httpShouldHandleCookies = false
@@ -593,6 +615,12 @@ class FourD4YService: ForumService {
                 ))
             }
         }
+
+        if threads.isEmpty {
+            threads = extractThreadLinksFallback(from: html, community: community)
+            AppLogger.debug("[4D4Y] Fallback extracted \(threads.count) thread links")
+        }
+
         AppLogger.debug("[4D4Y] Returning \(threads.count) unique threads")
 
         // If results are empty and it's the first page, try auto-login if possible
@@ -606,6 +634,182 @@ class FourD4YService: ForumService {
         }
 
         return threads
+    }
+
+    private func extractThreadLinksFallback(from html: String, community: Community) -> [Thread] {
+        let pattern = "<a[^>]+href=[\"']viewthread\\.php\\?tid=(\\d+)[^\"']*[\"'][^>]*>(.*?)</a>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return []
+        }
+
+        let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+        var seenIDs = Set<String>()
+        var threads: [Thread] = []
+
+        for match in matches {
+            guard let tidRange = Range(match.range(at: 1), in: html),
+                  let titleRange = Range(match.range(at: 2), in: html) else {
+                continue
+            }
+
+            let tid = String(html[tidRange])
+            let title = cleanThreadListTitle(String(html[titleRange]))
+            guard !title.isEmpty, seenIDs.insert(tid).inserted else {
+                continue
+            }
+
+            let context = surroundingHTMLBlock(in: html, around: match.range)
+            let authorName = extractThreadListAuthor(from: context) ?? "Unknown"
+            let authorAvatar = extractAvatarURL(from: context)
+            let resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
+                ? extractAvatarURLFromAuthorUid(in: context)
+                : authorAvatar
+
+            threads.append(Thread(
+                id: tid,
+                title: title,
+                content: "",
+                author: User(id: authorName, username: authorName, avatar: resolvedAuthorAvatar, role: nil),
+                community: community,
+                timeAgo: extractThreadListCreatedTime(from: context) ?? "",
+                likeCount: 0,
+                commentCount: extractThreadListReplyCount(from: context),
+                isLiked: false,
+                tags: nil,
+                lastPostTime: extractThreadListLastPostTime(from: context),
+                lastPosterName: extractThreadListLastPoster(from: context)
+            ))
+        }
+
+        return threads
+    }
+
+    private func cleanThreadListTitle(_ html: String) -> String {
+        cleanContent(html)
+            .replacingOccurrences(of: "\\[LINK:[^\\]]+\\|([^\\]]+)\\]", with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: "\\[IMAGE:[^\\]]+\\]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func surroundingHTMLBlock(in html: String, around range: NSRange) -> String {
+        guard let swiftRange = Range(range, in: html) else { return "" }
+        let lowerBound = html[..<swiftRange.lowerBound].range(of: "<tr", options: [.backwards, .caseInsensitive])?.lowerBound
+            ?? html[..<swiftRange.lowerBound].range(of: "<li", options: [.backwards, .caseInsensitive])?.lowerBound
+            ?? html[..<swiftRange.lowerBound].range(of: "<tbody", options: [.backwards, .caseInsensitive])?.lowerBound
+            ?? html.index(swiftRange.lowerBound, offsetBy: -800, limitedBy: html.startIndex)
+            ?? html.startIndex
+
+        let upperBound = html[swiftRange.upperBound...].range(of: "</tr>", options: [.caseInsensitive])?.upperBound
+            ?? html[swiftRange.upperBound...].range(of: "</li>", options: [.caseInsensitive])?.upperBound
+            ?? html[swiftRange.upperBound...].range(of: "</tbody>", options: [.caseInsensitive])?.upperBound
+            ?? html.index(swiftRange.upperBound, offsetBy: 1200, limitedBy: html.endIndex)
+            ?? html.endIndex
+
+        return String(html[lowerBound..<upperBound])
+    }
+
+    private func extractThreadListAuthor(from html: String) -> String? {
+        let patterns = [
+            "<p>\\s*<a[^>]+href=[\"']space\\.php\\?uid=\\d+[^\"']*[\"'][^>]*>([^<]+)</a>\\s*/\\s*[^<]+</p>",
+            "space\\.php\\?uid=\\d+[^>]*>([^<]+)</a>",
+            "class=[\"'][^\"']*author[^\"']*[\"'][^>]*>\\s*<a[^>]*>([^<]+)</a>",
+            "class=[\"'][^\"']*by[^\"']*[\"'][^>]*>\\s*<a[^>]*>([^<]+)</a>"
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                let author = cleanContent(String(html[range])).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !author.isEmpty {
+                    return author
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func extractThreadListCreatedTime(from html: String) -> String? {
+        let patterns = [
+            "<p>\\s*<a[^>]+href=[\"']space\\.php\\?uid=\\d+[^\"']*[\"'][^>]*>[^<]+</a>\\s*/\\s*([^<]+)</p>",
+            "((?:昨天|前天|\\d+\\s*(?:分钟前|小时前|天前)))"
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                let value = cleanContent(String(html[range])).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func extractThreadListReplyCount(from html: String) -> Int {
+        let patterns = [
+            "<a[^>]+class=[\"'][^\"']*num[^\"']*[\"'][^>]*>\\s*(\\d+)\\s*</a>",
+            "(?:回复|回覆|回帖|repl(?:y|ies))[^0-9]{0,12}(\\d+)",
+            "<strong>(\\d+)</strong>",
+            "class=[\"'][^\"']*(?:reply|num|count)[^\"']*[\"'][^>]*>\\s*(\\d+)"
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html),
+               let count = Int(String(html[range])) {
+                return count
+            }
+        }
+
+        return 0
+    }
+
+    private func extractThreadListLastPoster(from html: String) -> String? {
+        let patterns = [
+            "<p>\\s*<a[^>]+href=[\"']space\\.php\\?username=[^\"']+[\"'][^>]*>([^<]+)</a>\\s*/\\s*<a[^>]+href=[\"']redirect\\.php\\?tid=\\d+[^\"']*goto=lastpost[^\"']*[\"'][^>]*>[^<]+</a>\\s*</p>",
+            "lastpost[^>]*>.*?<a[^>]*>([^<]+)</a>"
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                let value = cleanContent(String(html[range])).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func extractThreadListLastPostTime(from html: String) -> String? {
+        let patterns = [
+            "<a[^>]+href=[\"']redirect\\.php\\?tid=\\d+[^\"']*goto=lastpost[^\"']*[\"'][^>]*>([^<]+)</a>",
+            "(\\d{4}-\\d{1,2}-\\d{1,2}\\s+\\d{1,2}:\\d{2})",
+            "(\\d{1,2}:\\d{2})",
+            "((?:昨天|前天|\\d+\\s*(?:分钟前|小时前|天前)))"
+        ]
+
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                let value = cleanContent(String(html[range])).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+        }
+
+        return nil
     }
 
     private func performAutoLogin() async throws -> Bool {
@@ -662,127 +866,8 @@ class FourD4YService: ForumService {
          AppLogger.debug("[4D4Y] Fetching thread detail: \(url)")
          let html = try await fetchContent(url: url)
 
-         // 0. Extract Max Pages
-         // Discuz 7.2: <div class="pages">... <a ...>1</a> <strong>2</strong> <a ...>3</a> ... </div>
-         // Or <div class="pages">1</div> (sometimes implied)
-         var totalPages: Int = 1
-         if let pagesRegex = try? NSRegularExpression(pattern: "<div class=\"pages\">(.*?)</div>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
-            let match = pagesRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
-            let range = Range(match.range(at: 1), in: html) {
-             let pagesContent = String(html[range])
-
-             // Find all numbers inside >...< or just naked numbers (if any)
-             // simplified: look for any number > 0. The max is likely the total pages
-             if let numRegex = try? NSRegularExpression(pattern: "(?:>|\\s)(\\d+)(?:<|\\s)", options: []) {
-                  let numMatches = numRegex.matches(in: pagesContent, range: NSRange(pagesContent.startIndex..., in: pagesContent))
-                  let nums = numMatches.compactMap { m -> Int? in
-                      if let r = Range(m.range(at: 1), in: pagesContent) {
-                          return Int(String(pagesContent[r]))
-                      }
-                      return nil
-                  }
-                  if let max = nums.max() {
-                      totalPages = max
-                  }
-             }
-         }
-
-         // Extract FID from breadcrumbs: forumdisplay.php?fid=7
-         var currentFid = "0"
-         if let fidRegex = try? NSRegularExpression(pattern: "forumdisplay\\.php\\?fid=(\\d+)", options: []),
-            let match = fidRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
-            let range = Range(match.range(at: 1), in: html) {
-             currentFid = String(html[range])
-             AppLogger.debug("[4D4Y] Extracted Topic FID: \(currentFid)")
-         }
-
-         // 1. Extract Title (with HTML entity decode)
-         // <title>Title - ...</title> or <h1>
-         var title = "Unknown Topic"
-         if let titleRegex = try? NSRegularExpression(pattern: "<title>(.*?)(?: - |<)", options: .caseInsensitive),
-            let match = titleRegex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
-            let r = Range(match.range(at: 1), in: html) {
-             title = String(html[r]).decodingHTMLEntities()
-         }
-
-         // 2. Extract Threads/Comments
-         // Standard Discuz: <div class="postmessage"> ... </div> or id="postmessage_..."
-         // We can look for <td class="t_msgfont" id="postmessage_...">Content</td>
-
-         // First, let's extract all post blocks with their content AND usernames
-         // Pattern to find post blocks: Look for postauthor section followed by content
-         // We'll extract username from: <td class="postauthor">...<div class="postinfo">...<a>USERNAME</a>
-
-         let postAuthors = extractPostAuthorsWithRanges(from: html)
-
-         let matches = postContentMatchesWithRanges(in: html)
-
-         var mainThread: Thread?
-         var comments: [Comment] = []
-
-         for (index, (match, matchRange)) in matches.enumerated() {
-             guard let pidRange = Range(match.range(at: 1), in: html),
-                   let contentRange = Range(match.range(at: 2), in: html) else {
-                 continue
-             }
-
-             let pid = String(html[pidRange])
-             let rawContent = String(html[contentRange])
-             let cleanContent = self.cleanContent(rawContent)
-
-             // Align author to content by finding the closest preceding postauthor block in the HTML.
-             // This avoids off-by-one shifts when extra postauthor elements (polls, notices)
-             // appear before the actual posts.
-             let author: ParsedPostAuthor = {
-                 var bestMatch: ParsedPostAuthor?
-                 for (candidate, candidateRange) in postAuthors {
-                     if candidateRange.location < match.range.location {
-                         bestMatch = candidate
-                     } else {
-                         break
-                     }
-                 }
-                 return bestMatch ?? ParsedPostAuthor(username: "User", avatar: "person.circle")
-             }()
-             let user = User(id: "0", username: author.username, avatar: author.avatar, role: nil)
-
-             // 4D4Y/Discuz specific: The first post on Page 1 is the Topic content.
-             // ...
-
-             let isMainThread = (page == 1 && index == 0)
-
-             if isMainThread {
-                 mainThread = Thread(
-                     id: threadId,
-                     title: title,
-                     content: cleanContent,
-                     author: user,
-                     community: Community(id: currentFid, name: "", description: "", category: "", activeToday: 0, onlineNow: 0),
-                     timeAgo: "Just now",
-                     likeCount: 0,
-                     commentCount: matches.count - 1,   // Approximate
-                     isLiked: false,
-                     tags: nil
-                 )
-             } else {
-                 comments.append(Comment(
-                     id: pid, // Use extracted PID
-                     author: user,
-                     content: cleanContent,
-                     timeAgo: "",
-                     likeCount: 0,
-                     replies: nil
-                 ))
-             }
-         }
-
-         if let main = mainThread {
-             return (main, comments, totalPages)
-         } else if !comments.isEmpty {
-             // Page > 1 case: No main thread, just comments.
-             // Return a placeholder main thread (it will be ignored by the ViewModel update logic anyway)
-             let placeholder = Thread(id: threadId, title: title, content: "", author: User(id: "0", username: "", avatar: "", role: nil), community: Community(id: currentFid, name: "", description: "", category: "", activeToday: 0, onlineNow: 0), timeAgo: "", likeCount: 0, commentCount: 0, isLiked: false, tags: nil)
-             return (placeholder, comments, totalPages)
+         if let parsed = parseThreadDetailHTML(html, threadId: threadId, page: page) {
+             return parsed
          } else {
              // Fallback if regex failed completely or page is empty
 
@@ -802,6 +887,354 @@ class FourD4YService: ForumService {
          }
     }
 
+    func parseThreadDetailHTML(_ html: String, threadId: String, page: Int) -> (Thread, [Comment], Int?)? {
+       let totalPages = extractThreadDetailTotalPages(from: html)
+       let currentFid = extractThreadDetailFid(from: html, threadId: threadId)
+       AppLogger.debug("[4D4Y] Extracted Topic FID: \(currentFid)")
+
+       let title = extractThreadDetailTitle(from: html)
+       let posts = extractThreadDetailPosts(from: html)
+       guard !posts.isEmpty else {
+           return nil
+       }
+
+       let commentPosts: ArraySlice<ParsedThreadDetailPost>
+       let thread: Thread
+
+       if page == 1 {
+           let mainPost = posts[0]
+           commentPosts = posts.dropFirst()
+           thread = Thread(
+               id: threadId,
+               title: title,
+               content: cleanContent(mainPost.rawContent),
+               author: user(from: mainPost.author),
+               community: Community(id: currentFid, name: "", description: "", category: "", activeToday: 0, onlineNow: 0),
+               timeAgo: mainPost.timeAgo,
+               likeCount: 0,
+               commentCount: commentPosts.count,
+               isLiked: false,
+               tags: nil
+           )
+       } else {
+           commentPosts = posts[posts.startIndex..<posts.endIndex]
+           thread = Thread(
+               id: threadId,
+               title: title,
+               content: "",
+               author: User(id: "0", username: "", avatar: "", role: nil),
+               community: Community(id: currentFid, name: "", description: "", category: "", activeToday: 0, onlineNow: 0),
+               timeAgo: "",
+               likeCount: 0,
+               commentCount: 0,
+               isLiked: false,
+               tags: nil
+           )
+       }
+
+       let comments = commentPosts.map { post in
+           Comment(
+               id: post.id,
+               author: user(from: post.author),
+               content: cleanContent(post.rawContent),
+               timeAgo: post.timeAgo,
+               likeCount: 0,
+               replies: nil
+           )
+       }
+
+       return (thread, comments, totalPages)
+    }
+
+    private func user(from author: ParsedPostAuthor) -> User {
+       User(
+           id: author.userId.isEmpty ? "0" : author.userId,
+           username: author.username.isEmpty ? "User" : author.username,
+           avatar: author.avatar,
+           role: nil
+       )
+    }
+
+    private func extractThreadDetailPosts(from html: String) -> [ParsedThreadDetailPost] {
+       let desktopPosts = extractDesktopThreadDetailPosts(from: html)
+       if !desktopPosts.isEmpty {
+           return desktopPosts
+       }
+
+       return extractWAPThreadDetailPosts(from: html)
+    }
+
+    private func extractDesktopThreadDetailPosts(from html: String) -> [ParsedThreadDetailPost] {
+       let postAuthors = extractPostAuthors(from: html)
+       let matches = postContentMatches(in: html)
+
+       return matches.enumerated().compactMap { index, match in
+           guard let pidRange = Range(match.range(at: 1), in: html),
+                 let contentRange = Range(match.range(at: 2), in: html) else {
+               return nil
+           }
+
+           let author = index < postAuthors.count
+               ? postAuthors[index]
+               : ParsedPostAuthor(username: "User", avatar: "person.circle")
+
+           return ParsedThreadDetailPost(
+               id: String(html[pidRange]),
+               author: author,
+               rawContent: String(html[contentRange]),
+               timeAgo: ""
+           )
+       }
+    }
+
+    private func extractWAPThreadDetailPosts(from html: String) -> [ParsedThreadDetailPost] {
+       var posts: [ParsedThreadDetailPost] = []
+       if let mainPost = extractWAPMainThreadPost(from: html) {
+           posts.append(mainPost)
+       }
+       posts.append(contentsOf: extractWAPReplyPosts(from: html))
+       return posts
+    }
+
+    private func extractWAPMainThreadPost(from html: String) -> ParsedThreadDetailPost? {
+       let patterns = [
+           "<div[^>]*class=[\"'][^\"']*detailcon[^\"']*[\"'][^>]*id=[\"']pid(\\d+)[\"'][^>]*>(.*?)</div>\\s*</div>\\s*<div[^>]*class=[\"'][^\"']*detailbtn",
+           "<div[^>]*id=[\"']pid(\\d+)[\"'][^>]*class=[\"'][^\"']*detailcon[^\"']*[\"'][^>]*>(.*?)</div>\\s*</div>\\s*<div[^>]*class=[\"'][^\"']*detailbtn",
+           "<div[^>]*class=[\"'][^\"']*detailcon[^\"']*[\"'][^>]*id=[\"']pid(\\d+)[\"'][^>]*>(.*?)</div>",
+           "<div[^>]*id=[\"']pid(\\d+)[\"'][^>]*class=[\"'][^\"']*detailcon[^\"']*[\"'][^>]*>(.*?)</div>"
+       ]
+
+       for pattern in patterns {
+           guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
+                 let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+                 let pidRange = Range(match.range(at: 1), in: html),
+                 let contentRange = Range(match.range(at: 2), in: html),
+                 let matchRange = Range(match.range, in: html) else {
+               continue
+           }
+
+           let pid = String(html[pidRange])
+           let prefix = String(html[..<matchRange.lowerBound].suffix(2500))
+           return ParsedThreadDetailPost(
+               id: pid,
+               author: extractWAPAuthor(from: prefix),
+               rawContent: String(html[contentRange]),
+               timeAgo: extractWAPMainPostTime(from: prefix, pid: pid)
+           )
+       }
+
+       return nil
+    }
+
+    private func extractWAPReplyPosts(from html: String) -> [ParsedThreadDetailPost] {
+       let replyList = firstCapture(
+           in: html,
+           pattern: "<div[^>]*class=[\"'][^\"']*replylist[^\"']*[\"'][^>]*>\\s*<ul>(.*?)</ul>\\s*</div>"
+       ) ?? html
+
+       guard let liRegex = try? NSRegularExpression(
+           pattern: "<li[^>]*id=[\"']pid(\\d+)[\"'][^>]*>(.*?)</li>",
+           options: [.caseInsensitive, .dotMatchesLineSeparators]
+       ) else {
+           return []
+       }
+
+       return liRegex.matches(in: replyList, options: [], range: NSRange(replyList.startIndex..., in: replyList)).compactMap { match in
+           guard let pidRange = Range(match.range(at: 1), in: replyList),
+                 let blockRange = Range(match.range(at: 2), in: replyList) else {
+               return nil
+           }
+
+           let pid = String(replyList[pidRange])
+           let block = String(replyList[blockRange])
+           let top = firstCapture(
+               in: block,
+               pattern: "<div[^>]*class=[\"'][^\"']*replytop[^\"']*[\"'][^>]*>(.*?)</div>"
+           ) ?? block
+
+           guard let rawContent = firstCapture(
+               in: block,
+               pattern: "<div[^>]*class=[\"'][^\"']*replycon[^\"']*[\"'][^>]*>(.*)</div>\\s*$"
+           ) else {
+               return nil
+           }
+
+           return ParsedThreadDetailPost(
+               id: pid,
+               author: extractWAPAuthor(from: top),
+               rawContent: rawContent,
+               timeAgo: extractWAPReplyPostTime(from: top)
+           )
+       }
+    }
+
+    private func extractWAPAuthor(from html: String) -> ParsedPostAuthor {
+       guard let regex = try? NSRegularExpression(
+           pattern: "<a[^>]+href=[\"']space\\.php\\?uid=(\\d+)[^\"']*[\"'][^>]*>([^<]+)</a>",
+           options: [.caseInsensitive, .dotMatchesLineSeparators]
+       ) else {
+           return ParsedPostAuthor(username: "User", avatar: "person.circle")
+       }
+
+       let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
+       guard let match = matches.last,
+             let uidRange = Range(match.range(at: 1), in: html),
+             let usernameRange = Range(match.range(at: 2), in: html) else {
+           return ParsedPostAuthor(username: "User", avatar: "person.circle")
+       }
+
+       let uid = String(html[uidRange])
+       let username = cleanContent(String(html[usernameRange])).trimmingCharacters(in: .whitespacesAndNewlines)
+       return ParsedPostAuthor(username: username, avatar: avatarURL(forUID: uid), userId: uid)
+    }
+
+    private func extractWAPMainPostTime(from html: String, pid: String) -> String {
+       let escapedPid = NSRegularExpression.escapedPattern(for: pid)
+       let patterns = [
+           "<em[^>]*id=[\"']authorposton\(escapedPid)[\"'][^>]*>(.*?)</em>",
+           "<em[^>]*>(.*?)</em>"
+       ]
+
+       for pattern in patterns {
+           if let raw = firstCapture(in: html, pattern: pattern) {
+               let time = cleanDiscuzPostTime(raw)
+               if !time.isEmpty {
+                   return time
+               }
+           }
+       }
+
+       return ""
+    }
+
+    private func extractWAPReplyPostTime(from html: String) -> String {
+       let patterns = [
+           "space\\.php\\?uid=\\d+[^>]*>[^<]+</a>\\s*/\\s*([^<]+)",
+           "(\\d{4}-\\d{1,2}-\\d{1,2}\\s+\\d{1,2}:\\d{2})",
+           "(\\d{1,2}:\\d{2})"
+       ]
+
+       for pattern in patterns {
+           if let raw = firstCapture(in: html, pattern: pattern) {
+               let time = cleanDiscuzPostTime(raw)
+               if !time.isEmpty {
+                   return time
+               }
+           }
+       }
+
+       return ""
+    }
+
+    private func cleanDiscuzPostTime(_ html: String) -> String {
+       cleanContent(html)
+           .replacingOccurrences(of: "发表于", with: "")
+           .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func extractThreadDetailTitle(from html: String) -> String {
+       let patterns = [
+           "<div[^>]*class=[\"'][^\"']*\\bdetail\\b[^\"']*[\"'][^>]*>.*?<h2[^>]*>\\s*(?:<a[^>]*>)?\\s*(.*?)\\s*</h2>",
+           "<h1[^>]*>\\s*(?:<a[^>]*>)?\\s*(.*?)\\s*</h1>",
+           "<title>\\s*(.*?)\\s*</title>",
+           "<h2[^>]*>\\s*(?:<a[^>]*>)?\\s*(.*?)\\s*</h2>"
+       ]
+
+       for pattern in patterns {
+           if let rawTitle = firstCapture(in: html, pattern: pattern) {
+               let title = cleanThreadDetailTitle(rawTitle)
+               if !title.isEmpty {
+                   return title
+               }
+           }
+       }
+
+       return "Unknown Topic"
+    }
+
+    private func cleanThreadDetailTitle(_ html: String) -> String {
+       var title = cleanContent(html).trimmingCharacters(in: .whitespacesAndNewlines)
+       if let suffixRange = title.range(of: " - ") {
+           title = String(title[..<suffixRange.lowerBound])
+       }
+       return title
+    }
+
+    private func extractThreadDetailFid(from html: String, threadId: String) -> String {
+       let decodedHTML = html.replacingOccurrences(of: "&amp;", with: "&")
+       let escapedThreadId = NSRegularExpression.escapedPattern(for: threadId)
+       let patterns = [
+           "\\bfid\\s*=\\s*parseInt\\(['\"](\\d+)['\"]\\)",
+           "post\\.php\\?action=reply[^\"']*[?&]fid=(\\d+)[^\"']*[?&]tid=\(escapedThreadId)",
+           "class=[\"'][^\"']*current[^\"']*[\"'][^>]*>\\s*<a[^>]+href=[\"']forumdisplay\\.php\\?fid=(\\d+)"
+       ]
+
+       for pattern in patterns {
+           if let fid = firstCapture(in: decodedHTML, pattern: pattern) {
+               return fid
+           }
+       }
+
+       if let navbar = firstCapture(
+           in: decodedHTML,
+           pattern: "<div[^>]*class=[\"'][^\"']*navbar[^\"']*[\"'][^>]*>(.*?)</div>"
+       ), let fid = allCaptures(in: navbar, pattern: "forumdisplay\\.php\\?fid=(\\d+)").last {
+           return fid
+       }
+
+       return allCaptures(in: decodedHTML, pattern: "forumdisplay\\.php\\?fid=(\\d+)").last ?? "0"
+    }
+
+    private func extractThreadDetailTotalPages(from html: String) -> Int {
+       var candidates: [Int] = []
+
+       if let pagesContent = firstCapture(in: html, pattern: "<div[^>]*class=[\"']pages[\"'][^>]*>(.*?)</div>") {
+           candidates.append(contentsOf: allCaptures(in: pagesContent, pattern: "(?:>|\\s)(\\d+)(?:<|\\s)").compactMap(Int.init))
+       }
+
+       if let seclist = firstCapture(in: html, pattern: "<div[^>]*class=[\"'][^\"']*seclist[^\"']*[\"'][^>]*>(.*?)</div>"),
+          let total = firstCapture(in: seclist, pattern: "\\d+\\s*/\\s*(\\d+)").flatMap(Int.init) {
+           candidates.append(total)
+       }
+
+       return candidates.max() ?? 1
+    }
+
+    private func firstCapture(
+       in text: String,
+       pattern: String,
+       group: Int = 1,
+       options: NSRegularExpression.Options = [.caseInsensitive, .dotMatchesLineSeparators]
+    ) -> String? {
+       guard let regex = try? NSRegularExpression(pattern: pattern, options: options),
+             let match = regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)),
+             match.numberOfRanges > group,
+             let range = Range(match.range(at: group), in: text) else {
+           return nil
+       }
+
+       return String(text[range])
+    }
+
+    private func allCaptures(
+       in text: String,
+       pattern: String,
+       group: Int = 1,
+       options: NSRegularExpression.Options = [.caseInsensitive, .dotMatchesLineSeparators]
+    ) -> [String] {
+       guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+           return []
+       }
+
+       return regex.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text)).compactMap { match in
+           guard match.numberOfRanges > group,
+                 let range = Range(match.range(at: group), in: text) else {
+               return nil
+           }
+           return String(text[range])
+       }
+    }
+
     private func postContentMatches(in html: String) -> [NSTextCheckingResult] {
         let patterns = [
             "class=\"t_msgfont\"[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</td>",
@@ -817,27 +1250,6 @@ class FourD4YService: ForumService {
             let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
             if !matches.isEmpty {
                 return matches
-            }
-        }
-
-        return []
-    }
-
-    private func postContentMatchesWithRanges(in html: String) -> [(NSTextCheckingResult, NSRange)] {
-        let patterns = [
-            "class=\"t_msgfont\"[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</td>",
-            "id=\"postmessage_(\\d+)\"[^>]*class=\"t_msgfont\"[^>]*>(.*?)</td>",
-            "<td[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</td>",
-            "<div[^>]*id=\"postmessage_(\\d+)\"[^>]*>(.*?)</div>"
-        ]
-
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
-                continue
-            }
-            let matches = regex.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html))
-            if !matches.isEmpty {
-                return matches.map { ($0, $0.range) }
             }
         }
 
@@ -872,38 +1284,6 @@ class FourD4YService: ForumService {
         return extractPostAuthorNames(from: html).map {
             ParsedPostAuthor(username: $0, avatar: "person.circle")
         }
-    }
-
-    private func extractPostAuthorsWithRanges(from html: String) -> [(ParsedPostAuthor, NSRange)] {
-        let blockPattern = "<td[^>]*class=\"postauthor\"[^>]*>(.*?)</td>"
-        let blockRegex = try? NSRegularExpression(pattern: blockPattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
-        let blockMatches = blockRegex?.matches(in: html, options: [], range: NSRange(html.startIndex..., in: html)) ?? []
-
-        var authors: [(ParsedPostAuthor, NSRange)] = []
-
-        for match in blockMatches {
-            guard let blockRange = Range(match.range(at: 1), in: html) else { continue }
-            let block = String(html[blockRange])
-            let username = extractPostUsername(from: block)
-            let parsedAvatar = extractAvatarURL(from: block)
-            let avatar = isGenericAvatar(parsedAvatar)
-                ? extractAvatarURLFromAuthorUid(in: block)
-                : parsedAvatar
-
-            if !username.isEmpty {
-                // Use the full match range (the entire <td class="postauthor">...</td>)
-                // so we can compare positions with post content matches
-                authors.append((ParsedPostAuthor(username: username, avatar: avatar), match.range))
-            }
-        }
-
-        if !authors.isEmpty {
-            return authors
-        }
-
-        // Fallback: extract author names without position info
-        let names = extractPostAuthorNames(from: html)
-        return names.map { (ParsedPostAuthor(username: $0, avatar: "person.circle"), NSRange(location: 0, length: 0)) }
     }
 
     private func extractPostAuthorNames(from html: String) -> [String] {
@@ -1113,7 +1493,7 @@ class FourD4YService: ForumService {
 
         // Comprehensive headers to mimic a browser AJAX request
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
         request.setValue("\(baseURL)/viewthread.php?tid=\(topicId)", forHTTPHeaderField: "Referer")
@@ -1213,7 +1593,7 @@ class FourD4YService: ForumService {
         request.httpMethod = "POST"
         request.httpBody = bodyData
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/xml, */*", forHTTPHeaderField: "Accept")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
 

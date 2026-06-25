@@ -50,6 +50,10 @@ struct AvatarView: View {
 
         guard !trimmed.isEmpty else { return nil }
 
+        // A "no avatar" placeholder means the user has no custom avatar; treat it as
+        // no URL so the view renders colored initials instead of a blank silhouette.
+        if trimmed.contains("noavatar") { return nil }
+
         if trimmed.hasPrefix("//") {
             return URL(string: "https:\(trimmed)")
         }
@@ -89,8 +93,10 @@ struct AvatarView: View {
             var request = URLRequest(url: candidateURL)
             request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
             request.setValue("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
-            if let host = candidateURL.host {
-                request.setValue("https://\(host)/forum/", forHTTPHeaderField: "Referer")
+            if candidateURL.host?.contains("4d4y.com") == true {
+                request.setValue("https://www.4d4y.com/forum/", forHTTPHeaderField: "Referer")
+            } else if let host = candidateURL.host {
+                request.setValue("https://\(host)/", forHTTPHeaderField: "Referer")
             }
 
             do {
@@ -121,7 +127,19 @@ struct AvatarView: View {
         }
 
         var candidates = [url]
-        let alternates = [
+        let sizeAlternates = avatarSizeAlternates(for: absolute)
+        let hostSources = ([absolute] + sizeAlternates).flatMap { source in
+            [
+                source,
+                source.replacingOccurrences(of: "https://www.4d4y.com/uc_server/", with: "https://www.4d4y.com/forum/uc_server/"),
+                source.replacingOccurrences(of: "https://www.4d4y.com/forum/uc_server/", with: "https://www.4d4y.com/uc_server/"),
+                source.replacingOccurrences(of: "https://www.4d4y.com/forum/uc_server/data/avatar/", with: "https://img02.4d4y.com/forum/uc_server/data/avatar/"),
+                source.replacingOccurrences(of: "https://img02.4d4y.com/forum/uc_server/data/avatar/", with: "https://www.4d4y.com/forum/uc_server/data/avatar/"),
+                source.replacingOccurrences(of: "https://img02.4d4y.com/forum/uc_server/data/avatar/", with: "https://img01.4d4y.com/forum/uc_server/data/avatar/")
+            ]
+        }
+
+        let alternates = hostSources + [
             absolute.replacingOccurrences(of: "https://www.4d4y.com/uc_server/", with: "https://www.4d4y.com/forum/uc_server/"),
             absolute.replacingOccurrences(of: "https://www.4d4y.com/forum/uc_server/", with: "https://www.4d4y.com/uc_server/"),
             absolute.replacingOccurrences(of: "https://www.4d4y.com/forum/uc_server/data/avatar/", with: "https://img02.4d4y.com/forum/uc_server/data/avatar/"),
@@ -130,12 +148,31 @@ struct AvatarView: View {
         ]
 
         for alternate in alternates {
+            // Skip Discuz "no avatar" placeholders: they return HTTP 200 but are a
+            // transparent silhouette, which would render as a blank circle instead of
+            // letting the view fall back to colored initials.
+            if alternate.contains("noavatar") { continue }
             if alternate != absolute, let alternateURL = URL(string: alternate), !candidates.contains(alternateURL) {
                 candidates.append(alternateURL)
             }
         }
 
         return candidates
+    }
+
+    private func avatarSizeAlternates(for absolute: String) -> [String] {
+        let sizes = ["small", "middle", "big"]
+        guard sizes.contains(where: { absolute.contains("_avatar_\($0).") }) else {
+            return []
+        }
+
+        return sizes.map { size in
+            absolute.replacingOccurrences(
+                of: "_avatar_(small|middle|big)\\.",
+                with: "_avatar_\(size).",
+                options: .regularExpression
+            )
+        }
     }
 
     private var fallbackAvatar: some View {

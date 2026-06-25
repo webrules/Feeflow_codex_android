@@ -81,9 +81,7 @@ class ThreadDetailViewModel: ObservableObject {
         isLatest = false
 
         // Load from cache first (instant display)
-        if useCache,
-           thread.community.id != "search",
-           let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
+        if useCache, let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
             if isInvalidCachedDetail(cached.0) {
                 AppLogger.debug("[ThreadDetailViewModel] Ignored invalid cached detail for \(service.id)/\(thread.id)")
                 comments = []
@@ -101,26 +99,10 @@ class ThreadDetailViewModel: ObservableObject {
             let (fetchedThread, fetchedComments, totalPages) = try await service.fetchThreadDetail(threadId: thread.id, page: 1)
 
             // Merge fetched content
-            // Preserve original content/title if the API didn't return any (e.g., search results)
-            let effectiveContent: String = {
-                let fetched = fetchedThread.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !fetched.isEmpty { return fetched }
-                let current = self.thread.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !current.isEmpty { return current }
-                return fetched
-            }()
-            let effectiveTitle: String = {
-                let fetched = fetchedThread.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                if isPlaceholderTitle(fetched) == false { return fetched }
-                let current = self.thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !current.isEmpty { return current }
-                return fetched
-            }()
-
             let updatedThread = Thread(
                 id: fetchedThread.id,
-                title: effectiveTitle,
-                content: effectiveContent,
+                title: fetchedThread.title,
+                content: fetchedThread.content,
                 author: resolvedAuthor(fetched: fetchedThread.author, current: self.thread.author),
                 community: self.thread.community,
                 timeAgo: fetchedThread.timeAgo,
@@ -189,7 +171,6 @@ class ThreadDetailViewModel: ObservableObject {
         let fetchedAvatar = fetched.avatar.trimmingCharacters(in: .whitespacesAndNewlines)
         let currentAvatar = current.avatar.trimmingCharacters(in: .whitespacesAndNewlines)
         let genericAvatars = Set(["", "person.circle", "person.circle.fill", "person.crop.circle", "person.crop.circle.fill"])
-        let genericUsernames = Set(["", "Unknown", "User", "匿名用户"])
 
         guard genericAvatars.contains(fetchedAvatar), !genericAvatars.contains(currentAvatar) else {
             return fetched
@@ -197,15 +178,10 @@ class ThreadDetailViewModel: ObservableObject {
 
         return User(
             id: fetched.id.isEmpty ? current.id : fetched.id,
-            username: genericUsernames.contains(fetched.username) ? current.username : fetched.username,
+            username: fetched.username.isEmpty || fetched.username == "Unknown" ? current.username : fetched.username,
             avatar: current.avatar,
             role: fetched.role ?? current.role
         )
-    }
-
-    private func isPlaceholderTitle(_ title: String) -> Bool {
-        ["", "无标题", "回答", "文章", "问题", "Unknown Topic", "Unknown Title"]
-            .contains(title)
     }
 
     private func isInvalidCachedDetail(_ cachedThread: Thread) -> Bool {

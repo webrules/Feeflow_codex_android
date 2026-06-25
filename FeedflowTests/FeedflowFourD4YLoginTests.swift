@@ -31,6 +31,48 @@ private let logoutOnlyHTML = """
 <html><body><a href='logging.php?action=logout'>退出</a></body></html>
 """
 
+private let wap4D4YThreadDetailHTML = """
+<html>
+<head>
+<title>国家刺激经济的终极杀招是啥？ - Discovery -  4D4Y  </title>
+<script type="text/javascript">var STYLEID = '1', gid = parseInt('34'), fid = parseInt('2'), tid = parseInt('3454758')</script>
+</head>
+<body>
+<div class="w navbar">
+    <a href="index.php">4D4Y</a> &raquo; <a href="forumdisplay.php?fid=2">Discovery</a> &raquo; 国家刺激经济的终极杀招是啥？
+</div>
+<div class="w bordertop detail">
+    <h2><a href="" class="classify">国家刺激经济的终极杀招是啥？</h2>
+    <div class="sub"><a href="space.php?uid=504383" style="margin-left: 20px; font-weight: 800">iamez</a>
+        <em id="authorposton74407801">发表于 2026-6-25 19:01</em>
+    </div>
+    <div class="detailcon" id="pid74407801">
+        我认为是银行把利率降到0，然后你钱存银行不仅没利息还得交管理费<br />
+        就问这样你慌不慌？
+    </div>
+</div>
+<div class="w detailbtn">
+    <a href="post.php?action=reply&amp;fid=2&amp;tid=3454758&amp;reppost=74407801&amp;extra=&amp;page=1">发表回复</a>
+</div>
+<div class="w replylist">
+<ul>
+<li id="pid74407806">
+    <div class="replytop"><span><a href="post.php?action=reply&amp;fid=2&amp;tid=3454758&amp;reppost=74407806&amp;extra=&amp;page=1">发表回复</a></span>2#</span><a href="space.php?uid=737271" style="margin-left: 20px; font-weight: 800">跳跳猪</a>/ 2026-6-25 19:03 </div>
+    <div class="replycon">零利率好像日本试过了&nbsp; &nbsp;&nbsp; &nbsp; <font size="1"><a href="https://www.4d4y.com/forum/viewthread.php?tid=2950630" target="_blank">论坛助手</a></font></div>
+</li>
+<li id="pid74407832">
+    <div class="replytop"><span><a href="post.php?action=reply&amp;fid=2&amp;tid=3454758&amp;reppost=74407832&amp;extra=&amp;page=1">发表回复</a></span>5#</span><a href="space.php?uid=504383" style="margin-left: 20px; font-weight: 800">iamez</a>/ 2026-6-25 19:07 </div>
+    <div class="replycon"><div class="quote"><blockquote>0利率不就是日本？<br />
+    <font size="2"><font color="#999999">linlance2000 发表于 2026-6-25 19:04</font></font></blockquote></div><br />
+    哈，你以为零利率就是存贷都是零？ 我存是零，贷款依然要付利息的，服不服？</div>
+</li>
+</ul>
+</div>
+<div class="w seclist"><table><tbody><tr><td><strong class="fade">1/3</strong></td></tr></tbody></table></div>
+</body>
+</html>
+"""
+
 // MARK: - Helpers
 
 private func makeCookie(name: String, value: String, domain: String = "4d4y.com", path: String = "/", expires: Date? = Date().addingTimeInterval(3600)) -> HTTPCookie {
@@ -389,6 +431,37 @@ final class FourD4YHTMLParsingTests: XCTestCase {
     func test_hasLogout_detected() {
         XCTAssertTrue(valid4D4YAuthHTML.contains("action=logout"))
         XCTAssertFalse(valid4D4YAuthHTML.contains("action=login") && !valid4D4YAuthHTML.contains("action=logout"))
+    }
+
+    func test_parseWAPThreadDetail_extractsThreadAndReplies() {
+        let service = FourD4YService()
+        guard let (thread, comments, totalPages) = service.parseThreadDetailHTML(wap4D4YThreadDetailHTML, threadId: "3454758", page: 1) else {
+            XCTFail("Expected WAP thread detail HTML to parse")
+            return
+        }
+
+        XCTAssertEqual(thread.id, "3454758")
+        XCTAssertEqual(thread.title, "国家刺激经济的终极杀招是啥？")
+        XCTAssertEqual(thread.community.id, "2")
+        XCTAssertEqual(thread.author.id, "504383")
+        XCTAssertEqual(thread.author.username, "iamez")
+        XCTAssertEqual(thread.timeAgo, "2026-6-25 19:01")
+        XCTAssertTrue(thread.content.contains("我认为是银行把利率降到0"))
+        XCTAssertEqual(thread.commentCount, 2)
+        XCTAssertEqual(totalPages, 3)
+
+        XCTAssertEqual(comments.count, 2)
+        XCTAssertEqual(comments[0].id, "74407806")
+        XCTAssertEqual(comments[0].author.id, "737271")
+        XCTAssertEqual(comments[0].author.username, "跳跳猪")
+        XCTAssertEqual(comments[0].timeAgo, "2026-6-25 19:03")
+        XCTAssertTrue(comments[0].content.contains("零利率好像日本试过了"))
+
+        XCTAssertEqual(comments[1].id, "74407832")
+        XCTAssertEqual(comments[1].author.username, "iamez")
+        XCTAssertEqual(comments[1].timeAgo, "2026-6-25 19:07")
+        XCTAssertTrue(comments[1].content.contains("0利率不就是日本？"))
+        XCTAssertTrue(comments[1].content.contains("哈，你以为零利率就是存贷都是零？"))
     }
 }
 

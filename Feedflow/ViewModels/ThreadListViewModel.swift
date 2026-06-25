@@ -98,11 +98,12 @@ class ThreadListViewModel: ObservableObject {
                     return
                 }
 
-                DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: newThreads)
-                mergeThreadsWithDiff(newThreads)
+                let mergedThreads = threadsPreservingRicherMetadata(newThreads, existing: previousThreads)
+                DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: mergedThreads)
+                mergeThreadsWithDiff(mergedThreads)
                 self.canLoadMore = !newThreads.isEmpty
                 self.currentPage = 1
-                if !newThreads.isEmpty && !hasChanges(old: previousThreads, new: newThreads) {
+                if !mergedThreads.isEmpty && !hasChanges(old: previousThreads, new: mergedThreads) {
                     showRefreshMessage("No new posts yet.")
                 }
                 // Small delay to ensure UI updates propagate to refreshable modifier
@@ -144,8 +145,9 @@ class ThreadListViewModel: ObservableObject {
 
                 guard shouldAcceptFreshThreads(newThreads) else { return }
 
-                DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: newThreads)
-                self.threads = newThreads
+                let mergedThreads = threadsPreservingRicherMetadata(newThreads, existing: threads)
+                DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: mergedThreads)
+                self.threads = mergedThreads
                 self.canLoadMore = !newThreads.isEmpty
             } catch is CancellationError {
                 // Ignore cancellation
@@ -166,12 +168,13 @@ class ThreadListViewModel: ObservableObject {
 
             guard shouldAcceptFreshThreads(newThreads) else { return }
 
-            DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: newThreads)
+            let mergedThreads = threadsPreservingRicherMetadata(newThreads, existing: threads)
+            DatabaseManager.shared.saveCachedTopics(cacheKey: cacheKey, topics: mergedThreads)
 
             // Only update UI if user is still at top and data has changed
-            if isAtTop && hasChanges(old: self.threads, new: newThreads) {
-                mergeThreadsWithDiff(newThreads)
-                self.canLoadMore = !newThreads.isEmpty
+            if isAtTop && hasChanges(old: self.threads, new: mergedThreads) {
+                mergeThreadsWithDiff(mergedThreads)
+                self.canLoadMore = !mergedThreads.isEmpty
 
             }
         } catch is CancellationError {
@@ -190,11 +193,19 @@ class ThreadListViewModel: ObservableObject {
         // Quick check: different counts
         if old.count != new.count { return true }
 
-        // Check if any thread IDs or titles changed
+        // Check if any visible thread metadata changed. This matters for sites
+        // where the same thread IDs can gain richer metadata after login.
         for (index, oldThread) in old.enumerated() {
             guard index < new.count else { return true }
             let newThread = new[index]
-            if oldThread.id != newThread.id || oldThread.title != newThread.title {
+            if oldThread.id != newThread.id ||
+                oldThread.title != newThread.title ||
+                oldThread.author.username != newThread.author.username ||
+                oldThread.author.avatar != newThread.author.avatar ||
+                oldThread.timeAgo != newThread.timeAgo ||
+                oldThread.commentCount != newThread.commentCount ||
+                oldThread.lastPostTime != newThread.lastPostTime ||
+                oldThread.lastPosterName != newThread.lastPosterName {
                 return true
             }
         }
@@ -203,6 +214,49 @@ class ThreadListViewModel: ObservableObject {
 
     private func shouldSkipBackgroundRefresh(for community: Community) -> Bool {
         service.id == "zhihu" && community.id == "recommend"
+    }
+
+    private func threadsPreservingRicherMetadata(_ incoming: [Thread], existing: [Thread]) -> [Thread] {
+        guard !existing.isEmpty else { return incoming }
+
+        let existingByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        return incoming.map { newThread in
+            guard let oldThread = existingByID[newThread.id] else {
+                return newThread
+            }
+
+            let author = shouldKeepExistingAvatar(newThread.author.avatar, oldThread.author.avatar)
+                ? oldThread.author
+                : newThread.author
+
+            return Thread(
+                id: newThread.id,
+                title: newThread.title,
+                content: newThread.content,
+                author: author,
+                community: newThread.community,
+                timeAgo: newThread.timeAgo.isEmpty ? oldThread.timeAgo : newThread.timeAgo,
+                likeCount: newThread.likeCount,
+                commentCount: newThread.commentCount,
+                isLiked: newThread.isLiked,
+                tags: newThread.tags ?? oldThread.tags,
+                lastPostTime: newThread.lastPostTime ?? oldThread.lastPostTime,
+                lastPosterName: newThread.lastPosterName ?? oldThread.lastPosterName
+            )
+        }
+    }
+
+    private func shouldKeepExistingAvatar(_ newAvatar: String, _ oldAvatar: String) -> Bool {
+        isPlaceholderAvatar(newAvatar) && !isPlaceholderAvatar(oldAvatar)
+    }
+
+    private func isPlaceholderAvatar(_ avatar: String) -> Bool {
+        let normalized = avatar.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.isEmpty ||
+            normalized == "person.circle" ||
+            normalized == "person.circle.fill" ||
+            normalized == "person.crop.circle" ||
+            normalized == "person.crop.circle.fill"
     }
 
     private func shouldAcceptFreshThreads(_ newThreads: [Thread]) -> Bool {
