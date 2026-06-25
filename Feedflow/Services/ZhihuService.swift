@@ -1760,12 +1760,15 @@ private final class ZhihuWebSearchPageLoader: NSObject, WKNavigationDelegate {
     private var continuation: CheckedContinuation<[ZhihuWebSearchResult], Error>?
     private var webView: WKWebView?
     private var extractionAttempts = 0
+    private var query: String = ""
 
     init(userAgent: String) {
         self.userAgent = userAgent
     }
 
     func load(url: URL) async throws -> [ZhihuWebSearchResult] {
+        query = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "q" })?.value ?? ""
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
 
@@ -1781,7 +1784,53 @@ private final class ZhihuWebSearchPageLoader: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        extractResults()
+        fetchViaAPI()
+    }
+
+    /// Zhihu's search API returns structured authors *with avatar URLs*, but only
+    /// succeeds when called from within the logged-in zhihu.com origin (it fails
+    /// from URLSession). Run it as an in-page fetch first; fall back to scraping
+    /// the rendered DOM (author name only, no avatar) if it yields nothing.
+    private func fetchViaAPI() {
+        guard let webView else { extractResults(); return }
+        let body = """
+        try {
+          const url = `/api/v4/search_v3?gk_version=gz-gaokao&t=general&q=${encodeURIComponent(q)}&correction=1&offset=0&limit=20&filter_fields=&lc_idx=0&show_all_topics=0&search_source=Normal`;
+          let resp = await fetch(url, { credentials: 'include' });
+          const text = await resp.text();
+          let j = {}; try { j = JSON.parse(text); } catch (e) {}
+          if (!resp.ok) return JSON.stringify([]);
+          const out = [];
+          for (const item of (j.data || [])) {
+            const o = item.object; if (!o) continue;
+            const t = o.type; if (!['answer','article','question'].includes(t)) continue;
+            const a = o.author || {};
+            out.push({
+              id: String(o.id || ''),
+              type: t,
+              title: (o.title || (o.question && o.question.title) || ''),
+              excerpt: (o.excerpt || ''),
+              authorName: (a.name || ''),
+              authorURL: (a.url || ''),
+              avatarURL: (a.avatar_url || a.avatar_url_template || '')
+            });
+          }
+          return JSON.stringify(out);
+        } catch (e) { return JSON.stringify([]); }
+        """
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var apiResults: [ZhihuWebSearchResult] = []
+            if let value = try? await webView.callAsyncJavaScript(body, arguments: ["q": self.query], contentWorld: .page),
+               let s = value as? String, let data = s.data(using: .utf8) {
+                apiResults = (try? JSONDecoder().decode([ZhihuWebSearchResult].self, from: data)) ?? []
+            }
+            if !apiResults.isEmpty {
+                self.finish(.success(apiResults))
+            } else {
+                self.extractResults()
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -1818,17 +1867,30 @@ private final class ZhihuWebSearchPageLoader: NSObject, WKNavigationDelegate {
             seen.add(key);
 
             const heading = card.querySelector('h1, h2, h3');
-            const excerpt = card.querySelector('.RichContent-inner, .ContentItem-excerpt, [class*="RichContent"], [class*="Excerpt"]');
-            const author = card.querySelector('a[href*="/people/"]');
-            const avatar = card.querySelector('img');
+            const excerptEl = card.querySelector('.RichContent-inner, .ContentItem-excerpt, [class*="RichContent"], [class*="Excerpt"]');
+
+            // Zhihu search cards do not render an AuthorInfo/avatar block in this
+            // DOM. The author name is the bold prefix of the answer/article
+            // excerpt, e.g. "<b data-first-child>申权认真生活</b>：正文...". Prefer an
+            // explicit people link if present, else use that bold prefix. Use
+            // textContent (not innerText) because the excerpt is collapsed.
+            const peopleLink = [...card.querySelectorAll('a[href*="/people/"]')].find(item => (item.textContent || '').trim().length > 0);
+            const boldAuthor = card.querySelector('b[data-first-child]');
+            let authorName = ((peopleLink?.textContent || boldAuthor?.textContent || '').trim()).replace(/[：:]\\s*$/, '');
+
+            let excerptText = (excerptEl?.textContent || '').trim();
+            if (authorName && excerptText.startsWith(authorName)) {
+              excerptText = excerptText.slice(authorName.length).replace(/^[：:]\\s*/, '');
+            }
+
             results.push({
               id,
               type,
-              title: (heading?.innerText || link.innerText || '').trim(),
-              excerpt: (excerpt?.innerText || '').trim(),
-              authorName: (author?.innerText || '').trim(),
-              authorURL: author?.href || '',
-              avatarURL: avatar?.src || ''
+              title: (heading?.textContent || link.textContent || '').trim(),
+              excerpt: excerptText,
+              authorName: authorName,
+              authorURL: peopleLink?.href || '',
+              avatarURL: ''
             });
           }
           return JSON.stringify(results);
