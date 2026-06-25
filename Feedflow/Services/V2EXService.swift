@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 class V2EXService: ForumService {
     var name: String { "V2EX" }
@@ -177,6 +178,60 @@ class V2EXService: ForumService {
         if html.isEmpty { AppLogger.debug("[V2EX] HTML is empty!") }
 
         return parseThreads(from: html, categoryId: categoryId, communities: communities)
+    }
+
+    func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool) {
+        guard page == 1 else { return ([], false) }
+
+        var components = URLComponents(string: "https://www.google.com/search")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: "site:v2ex.com/t \(query)"),
+            URLQueryItem(name: "num", value: "20"),
+            URLQueryItem(name: "hl", value: "zh-CN")
+        ]
+        guard let url = components?.url else {
+            throw URLError(.badURL)
+        }
+
+        let results = try await searchThreadsInGoogle(url: url)
+        let community = Community(id: "search", name: "Search", description: "", category: "V2EX", activeToday: 0, onlineNow: 0)
+        var seenIDs = Set<String>()
+        let threads = results.compactMap { result -> Thread? in
+            guard let topicID = v2exTopicID(from: result.url), seenIDs.insert(topicID).inserted else {
+                return nil
+            }
+
+            return Thread(
+                id: topicID,
+                title: result.title,
+                content: result.excerpt,
+                author: User(id: "", username: "V2EX", avatar: "person.circle", role: nil),
+                community: community,
+                timeAgo: "",
+                likeCount: 0,
+                commentCount: 0,
+                isLiked: false,
+                tags: ["Google"]
+            )
+        }
+
+        AppLogger.debug("[V2EX] Google search returned \(threads.count) topics for \(query)")
+        return (threads, false)
+    }
+
+    @MainActor
+    private func searchThreadsInGoogle(url: URL) async throws -> [V2EXGoogleSearchResult] {
+        try await V2EXGoogleSearchLoader().load(url: url)
+    }
+
+    private func v2exTopicID(from url: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "v2ex\\.com/t/(\\d+)") else { return nil }
+        let range = NSRange(url.startIndex..., in: url)
+        guard let match = regex.firstMatch(in: url, range: range),
+              let idRange = Range(match.range(at: 1), in: url) else {
+            return nil
+        }
+        return String(url[idRange])
     }
 
     private func parseThreads(from html: String, categoryId: String, communities: [Community]) -> [Thread] {
@@ -488,5 +543,94 @@ class V2EXService: ForumService {
         }
 
         return url
+    }
+
+}
+
+private struct V2EXGoogleSearchResult: Decodable {
+    let url: String
+    let title: String
+    let excerpt: String
+}
+
+@MainActor
+private final class V2EXGoogleSearchLoader: NSObject, WKNavigationDelegate {
+    private var continuation: CheckedContinuation<[V2EXGoogleSearchResult], Error>?
+    private var webView: WKWebView?
+    private var extractionAttempts = 0
+
+    func load(url: URL) async throws -> [V2EXGoogleSearchResult] {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        webView.navigationDelegate = self
+        self.webView = webView
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30))
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        extractResults()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish(.failure(error))
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        finish(.failure(error))
+    }
+
+    private func extractResults() {
+        let script = """
+        (() => {
+          const results = [];
+          const seen = new Set();
+          for (const heading of document.querySelectorAll('h3')) {
+            const link = heading.closest('a[href]');
+            const url = link?.href || '';
+            if (!/v2ex\\.com\\/t\\/\\d+/.test(url) || seen.has(url)) continue;
+            seen.add(url);
+            const card = heading.closest('[data-snhf], .MjjYud, .g, div');
+            const text = (card?.innerText || '').replace(/\\s+/g, ' ').trim();
+            const title = heading.innerText.trim();
+            const excerpt = text.startsWith(title) ? text.slice(title.length).trim() : text;
+            results.push({ url, title, excerpt });
+          }
+          return JSON.stringify(results);
+        })()
+        """
+
+        webView?.evaluateJavaScript(script) { [weak self] value, error in
+            guard let self else { return }
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+
+            let json = value as? String ?? "[]"
+            let results = (try? JSONDecoder().decode([V2EXGoogleSearchResult].self, from: Data(json.utf8))) ?? []
+            if !results.isEmpty || self.extractionAttempts >= 5 {
+                self.finish(.success(results))
+            } else {
+                self.extractionAttempts += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                    self?.extractResults()
+                }
+            }
+        }
+    }
+
+    private func finish(_ result: Result<[V2EXGoogleSearchResult], Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        webView?.navigationDelegate = nil
+        webView = nil
+        continuation.resume(with: result)
     }
 }

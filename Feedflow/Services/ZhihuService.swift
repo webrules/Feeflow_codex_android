@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 // MARK: - Zhihu API Response Models
 
@@ -267,6 +268,16 @@ struct ZhihuSearchObject: Codable {
 struct ZhihuSearchHighlight: Codable {
     let title: String?
     let description: String?
+}
+
+private struct ZhihuWebSearchResult: Decodable {
+    let id: String
+    let type: String
+    let title: String
+    let excerpt: String
+    let authorName: String
+    let authorURL: String
+    let avatarURL: String
 }
 
 
@@ -1392,10 +1403,26 @@ class ZhihuService: ForumService {
     // MARK: - Search
 
     func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool) {
+        // Zhihu's browser search is more complete than its undocumented API
+        // response for some authenticated sessions. Use the same WebKit cookie
+        // store as the login flow for the initial result set.
+        if page == 1,
+           let webResults = try? await searchThreadsInWebKit(query: query),
+           !webResults.isEmpty {
+            return (webResults, webResults.count >= 10)
+        }
+
         let limit = 20
         let offset = (page - 1) * limit
-        guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://www.zhihu.com/api/v4/search_v3?q=\(encodedQuery)&t=general&offset=\(offset)&limit=\(limit)") else {
+        var components = URLComponents(string: "https://www.zhihu.com/api/v4/search_v3")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: query),
+            URLQueryItem(name: "t", value: "content"),
+            URLQueryItem(name: "correction", value: "1"),
+            URLQueryItem(name: "offset", value: String(offset)),
+            URLQueryItem(name: "limit", value: String(limit))
+        ]
+        guard let url = components?.url else {
             return ([], false)
         }
 
@@ -1409,7 +1436,7 @@ class ZhihuService: ForumService {
         if let searchResponse = try? decoder.decode(ZhihuSearchResponse.self, from: data) {
             let items = searchResponse.data ?? []
             let threads = convertSearchItemsToThreads(items)
-            let hasMore = !(searchResponse.paging?.isEnd ?? true)
+            let hasMore = searchResponse.paging?.isEnd == false || searchResponse.paging?.next?.isEmpty == false
             AppLogger.debug("[Zhihu] Search returned \(threads.count) results (structured)")
             return (threads, hasMore)
         }
@@ -1422,7 +1449,7 @@ class ZhihuService: ForumService {
         }
 
         let paging = json["paging"] as? [String: Any]
-        let hasMore = !(paging?["is_end"] as? Bool ?? true)
+        let hasMore = paging?["is_end"] as? Bool == false || (paging?["next"] as? String)?.isEmpty == false
 
         let threads = dataArray.compactMap { item -> Thread? in
             guard let object = item["object"] as? [String: Any],
@@ -1435,12 +1462,12 @@ class ZhihuService: ForumService {
             let effectiveTitle: String
             if objType == "answer", let question = object["question"] as? [String: Any],
                let qTitle = question["title"] as? String, !qTitle.isEmpty {
-                effectiveTitle = qTitle
+                effectiveTitle = cleanSearchText(qTitle)
             } else {
-                effectiveTitle = object["title"] as? String ?? "无标题"
+                effectiveTitle = cleanSearchText(object["title"] as? String ?? "无标题")
             }
 
-            let excerpt = object["excerpt"] as? String ?? ""
+            let excerpt = cleanSearchText(object["excerpt"] as? String ?? "")
             let authorDict = object["author"] as? [String: Any]
 
             let authorUid = authorDict?["id"] as? String ?? ""
@@ -1474,8 +1501,8 @@ class ZhihuService: ForumService {
             }
 
             let threadId = "\(objType)_\(object.id ?? 0)"
-            let title = object.effectiveTitle
-            let contentPreview = object.excerpt ?? ""
+            let title = cleanSearchText(item.highlight?.title ?? object.effectiveTitle)
+            let contentPreview = cleanSearchText(item.highlight?.description ?? object.excerpt ?? "")
             let author = object.author
 
             return Thread(
@@ -1493,6 +1520,46 @@ class ZhihuService: ForumService {
                 likeCount: object.voteupCount ?? 0,
                 commentCount: object.commentCount ?? 0,
                 tags: [objType == "answer" ? "回答" : objType == "article" ? "文章" : "问题"]
+            )
+        }
+    }
+
+    @MainActor
+    private func searchThreadsInWebKit(query: String) async throws -> [Thread] {
+        var components = URLComponents(string: "https://www.zhihu.com/search")
+        components?.queryItems = [
+            URLQueryItem(name: "type", value: "content"),
+            URLQueryItem(name: "q", value: query)
+        ]
+        guard let url = components?.url else { return [] }
+
+        let loader = ZhihuWebSearchPageLoader(userAgent: userAgent)
+        let results = try await loader.load(url: url)
+        var seenIDs = Set<String>()
+
+        return results.compactMap { result in
+            guard ["answer", "article", "question"].contains(result.type),
+                  !result.id.isEmpty,
+                  !result.title.isEmpty,
+                  seenIDs.insert("\(result.type)_\(result.id)").inserted else {
+                return nil
+            }
+
+            return Thread(
+                id: "\(result.type)_\(result.id)",
+                title: cleanSearchText(result.title),
+                content: cleanSearchText(result.excerpt),
+                author: User(
+                    id: result.authorURL,
+                    username: result.authorName.isEmpty ? "匿名用户" : result.authorName,
+                    avatar: normalizedAvatarURL(result.avatarURL),
+                    role: nil
+                ),
+                community: Community(id: "search", name: "搜索", description: "", category: "zhihu", activeToday: 0, onlineNow: 0),
+                timeAgo: "",
+                likeCount: 0,
+                commentCount: 0,
+                tags: [result.type == "answer" ? "回答" : result.type == "article" ? "文章" : "问题"]
             )
         }
     }
@@ -1557,6 +1624,14 @@ class ZhihuService: ForumService {
         guard let ts = timestamp, ts > 0 else { return "" }
         let date = Date(timeIntervalSince1970: TimeInterval(ts))
         return calculateTimeAgo(from: date)
+    }
+
+    private func cleanSearchText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .decodingHTMLEntities()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Strip HTML tags and clean content for display
@@ -1676,5 +1751,118 @@ class ZhihuService: ForumService {
         components.path = path
 
         return (components.string ?? url).lowercased()
+    }
+}
+
+@MainActor
+private final class ZhihuWebSearchPageLoader: NSObject, WKNavigationDelegate {
+    private let userAgent: String
+    private var continuation: CheckedContinuation<[ZhihuWebSearchResult], Error>?
+    private var webView: WKWebView?
+    private var extractionAttempts = 0
+
+    init(userAgent: String) {
+        self.userAgent = userAgent
+    }
+
+    func load(url: URL) async throws -> [ZhihuWebSearchResult] {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.customUserAgent = userAgent
+        webView.navigationDelegate = self
+        self.webView = webView
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30))
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        extractResults()
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish(.failure(error))
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        finish(.failure(error))
+    }
+
+    private func extractResults() {
+        let script = """
+        (() => {
+          const selectors = '.SearchResult-Card, [class*="SearchResult"]';
+          const roots = [...document.querySelectorAll(selectors)];
+          const fallbackRoots = [...document.querySelectorAll('a[href*="/question/"], a[href*="zhuanlan.zhihu.com/p/"]')]
+            .map(link => link.closest('.SearchResult-Card, [class*="SearchResult"], article, section, div'));
+          const cards = [...new Set([...roots, ...fallbackRoots].filter(Boolean))];
+          const seen = new Set();
+          const results = [];
+
+          for (const card of cards) {
+            const links = [...card.querySelectorAll('a[href]')];
+            const link = links.find(item => /\\/question\\/\\d+\\/answer\\/\\d+|zhuanlan\\.zhihu\\.com\\/p\\/\\d+|\\/question\\/\\d+/.test(item.href));
+            if (!link) continue;
+
+            const answer = link.href.match(/\\/question\\/\\d+\\/answer\\/(\\d+)/);
+            const article = link.href.match(/zhuanlan\\.zhihu\\.com\\/p\\/(\\d+)/);
+            const question = link.href.match(/\\/question\\/(\\d+)/);
+            const type = answer ? 'answer' : article ? 'article' : 'question';
+            const id = answer ? answer[1] : article ? article[1] : question ? question[1] : '';
+            const key = `${type}_${id}`;
+            if (!id || seen.has(key)) continue;
+            seen.add(key);
+
+            const heading = card.querySelector('h1, h2, h3');
+            const excerpt = card.querySelector('.RichContent-inner, .ContentItem-excerpt, [class*="RichContent"], [class*="Excerpt"]');
+            const author = card.querySelector('a[href*="/people/"]');
+            const avatar = card.querySelector('img');
+            results.push({
+              id,
+              type,
+              title: (heading?.innerText || link.innerText || '').trim(),
+              excerpt: (excerpt?.innerText || '').trim(),
+              authorName: (author?.innerText || '').trim(),
+              authorURL: author?.href || '',
+              avatarURL: avatar?.src || ''
+            });
+          }
+          return JSON.stringify(results);
+        })()
+        """
+
+        webView?.evaluateJavaScript(script) { [weak self] value, error in
+            guard let self else { return }
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+
+            let results = (value as? String)
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode([ZhihuWebSearchResult].self, from: $0) } ?? []
+
+            if results.count < 20, self.extractionAttempts < 5 {
+                self.extractionAttempts += 1
+                self.webView?.evaluateJavaScript("window.scrollTo(0, document.body.scrollHeight)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    self.extractResults()
+                }
+            } else {
+                self.finish(.success(results))
+            }
+        }
+    }
+
+    private func finish(_ result: Result<[ZhihuWebSearchResult], Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        webView?.navigationDelegate = nil
+        webView = nil
+        continuation.resume(with: result)
     }
 }

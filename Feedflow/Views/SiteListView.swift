@@ -151,6 +151,7 @@ struct CommunityConfigView: View {
 struct SiteListView: View {
     // No callback needed, NavigationLink handles it
     @EnvironmentObject var themeManager: ThemeManager
+    @EnvironmentObject var navigationManager: NavigationManager
     @ObservedObject var localizationManager = LocalizationManager.shared
     @ObservedObject var communitySettings = CommunitySettingsManager.shared
     @State private var showSettings: Bool = false
@@ -158,43 +159,61 @@ struct SiteListView: View {
     @State private var showBookmarks: Bool = false
     @State private var showCommunityConfig: Bool = false
     @State private var showCrossSiteSummary: Bool = false
+    @State private var searchQuery = ""
+    @State private var selectedSearchSite: ForumSite = .zhihu
+    @FocusState private var isSearchFieldFocused: Bool
+
+    private let searchableSites: [ForumSite] = [.fourD4Y, .v2ex, .linuxDo, .zhihu]
 
     var body: some View {
         ZStack {
             Color.forumBackground.ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                Text("select_community".localized())
-                    .font(.title2)
-                    .bold()
-                    .foregroundColor(.forumTextPrimary)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 24) {
+                        Text("select_community".localized())
+                            .font(.title2)
+                            .bold()
+                            .foregroundColor(.forumTextPrimary)
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
-                    ForEach(communitySettings.visibleSites) { site in
-                        let service = site.makeService()
+                        homeSearchBar
+                            .id("homeSearch")
+                            .padding(.horizontal)
 
-                        NavigationLink(value: site) {
-                            VStack(spacing: 16) {
-                                SiteIcon(service: service, size: 52)
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
+                            ForEach(communitySettings.visibleSites) { site in
+                                let service = site.makeService()
 
-                                Text(service.name)
-                                    .font(.headline)
-                                    .foregroundColor(.forumTextPrimary)
+                                NavigationLink(value: site) {
+                                    VStack(spacing: 16) {
+                                        SiteIcon(service: service, size: 52)
+
+                                        Text(service.name)
+                                            .font(.headline)
+                                            .foregroundColor(.forumTextPrimary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 32)
+                                    .background(Color.forumCard)
+                                    .cornerRadius(16)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.gray.opacity(0.1), lineWidth: 1)
+                                    )
+                                }
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 32)
-                            .background(Color.forumCard)
-                            .cornerRadius(16)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(Color.gray.opacity(0.1), lineWidth: 1)
-                            )
                         }
+                        .padding()
                     }
                 }
-                .padding()
-
-                Spacer()
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: isSearchFieldFocused) { _, isFocused in
+                    guard isFocused else { return }
+                    withAnimation {
+                        proxy.scrollTo("homeSearch", anchor: .top)
+                    }
+                }
             }
             .sheet(isPresented: $showSettings) {
                 SettingsView()
@@ -219,6 +238,62 @@ struct SiteListView: View {
                 .padding(.bottom, 8)
                 .background(Color.forumBackground)
         }
+    }
+
+    private var homeSearchBar: some View {
+        HStack(spacing: 8) {
+            Menu {
+                ForEach(searchableSites) { site in
+                    Button {
+                        selectedSearchSite = site
+                    } label: {
+                        Label(site.makeService().name, systemImage: site.makeService().logo)
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: selectedSearchSite.makeService().logo)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(selectedSearchSite.makeService().name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                }
+                .foregroundColor(.forumTextPrimary)
+                .frame(width: 88, alignment: .leading)
+            }
+
+            TextField("Search", text: $searchQuery)
+                .font(.system(size: 15))
+                .foregroundColor(.forumTextPrimary)
+                .autocorrectionDisabled()
+                .focused($isSearchFieldFocused)
+                .submitLabel(.search)
+                .onSubmit(startSearch)
+
+            Button(action: startSearch) {
+                Text("Search")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .forumTextSecondary : .forumAccent)
+            }
+            .disabled(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 46)
+        .background(Color.forumCard)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.forumSeparator.opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    private func startSearch() {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        isSearchFieldFocused = false
+        navigationManager.path.append(SiteSearchRoute(site: selectedSearchSite, query: query))
     }
 
     private var homeToolbar: some View {

@@ -223,7 +223,8 @@ class FourD4YService: ForumService {
     }
 
     private func validateSession(cookies: [HTTPCookie]) async -> Bool {
-        guard let url = URL(string: "\(baseURL)/index.php") else {
+        //        guard let url = URL(string: "\(baseURL)/index.php") else {
+        guard let url = URL(string: "\(baseURL)") else {
             return false
         }
 
@@ -442,6 +443,52 @@ class FourD4YService: ForumService {
 
     func fetchCategoryThreads(categoryId: String, communities: [Community], page: Int) async throws -> [Thread] {
         return try await fetchCategoryThreadsInternal(categoryId: categoryId, communities: communities, page: page, retryCount: 0)
+    }
+
+    func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool) {
+        if currentSID == nil {
+            _ = try await fetchCategories()
+        }
+
+        let sidParameter = currentSID.map { "&sid=\($0)" } ?? ""
+        let encodedQuery = gbkEncode(query)
+        guard let url = URL(string: "\(baseURL)/search.php?searchsubmit=yes&srchtxt=\(encodedQuery)&searchfield=all&page=\(page)\(sidParameter)") else {
+            throw URLError(.badURL)
+        }
+
+        let html = try await fetchContent(url: url)
+        let pattern = "href=\\\"viewthread\\.php\\?tid=(\\d+)[^\\\"]*\\\"[^>]*>(.*?)</a>"
+        let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let matches = regex.matches(in: html, range: NSRange(html.startIndex..., in: html))
+        let community = Community(id: "search", name: "Search", description: "", category: "4d4y", activeToday: 0, onlineNow: 0)
+        var seenIDs = Set<String>()
+
+        let threads = matches.compactMap { match -> Thread? in
+            guard let idRange = Range(match.range(at: 1), in: html),
+                  let titleRange = Range(match.range(at: 2), in: html) else {
+                return nil
+            }
+
+            let id = String(html[idRange])
+            let title = cleanContent(String(html[titleRange]))
+            guard !title.isEmpty, seenIDs.insert(id).inserted else { return nil }
+
+            return Thread(
+                id: id,
+                title: title,
+                content: "",
+                author: User(id: "", username: "Unknown", avatar: "person.circle", role: nil),
+                community: community,
+                timeAgo: "",
+                likeCount: 0,
+                commentCount: 0,
+                isLiked: false,
+                tags: nil
+            )
+        }
+
+        AppLogger.debug("[4D4Y] Search returned \(threads.count) topics for \(query)")
+        return (threads, threads.count >= 20)
     }
 
     private func fetchCategoryThreadsInternal(categoryId: String, communities: [Community], page: Int, retryCount: Int) async throws -> [Thread] {

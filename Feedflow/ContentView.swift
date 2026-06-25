@@ -11,6 +11,9 @@ struct ContentView: View {
                 .navigationDestination(for: ForumSite.self) { site in
                     CommunitiesView(service: site.makeService())
                 }
+                .navigationDestination(for: SiteSearchRoute.self) { route in
+                    SiteSearchResultsView(route: route)
+                }
         }
         .environmentObject(navigationManager)
     }

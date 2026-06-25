@@ -81,7 +81,9 @@ class ThreadDetailViewModel: ObservableObject {
         isLatest = false
 
         // Load from cache first (instant display)
-        if useCache, let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
+        if useCache,
+           thread.community.id != "search",
+           let cached = DatabaseManager.shared.getCachedThread(threadId: thread.id, serviceId: service.id) {
             if isInvalidCachedDetail(cached.0) {
                 AppLogger.debug("[ThreadDetailViewModel] Ignored invalid cached detail for \(service.id)/\(thread.id)")
                 comments = []
@@ -109,7 +111,7 @@ class ThreadDetailViewModel: ObservableObject {
             }()
             let effectiveTitle: String = {
                 let fetched = fetchedThread.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !fetched.isEmpty && fetched != "无标题" { return fetched }
+                if isPlaceholderTitle(fetched) == false { return fetched }
                 let current = self.thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !current.isEmpty { return current }
                 return fetched
@@ -187,6 +189,7 @@ class ThreadDetailViewModel: ObservableObject {
         let fetchedAvatar = fetched.avatar.trimmingCharacters(in: .whitespacesAndNewlines)
         let currentAvatar = current.avatar.trimmingCharacters(in: .whitespacesAndNewlines)
         let genericAvatars = Set(["", "person.circle", "person.circle.fill", "person.crop.circle", "person.crop.circle.fill"])
+        let genericUsernames = Set(["", "Unknown", "User", "匿名用户"])
 
         guard genericAvatars.contains(fetchedAvatar), !genericAvatars.contains(currentAvatar) else {
             return fetched
@@ -194,10 +197,15 @@ class ThreadDetailViewModel: ObservableObject {
 
         return User(
             id: fetched.id.isEmpty ? current.id : fetched.id,
-            username: fetched.username.isEmpty || fetched.username == "Unknown" ? current.username : fetched.username,
+            username: genericUsernames.contains(fetched.username) ? current.username : fetched.username,
             avatar: current.avatar,
             role: fetched.role ?? current.role
         )
+    }
+
+    private func isPlaceholderTitle(_ title: String) -> Bool {
+        ["", "无标题", "回答", "文章", "问题", "Unknown Topic", "Unknown Title"]
+            .contains(title)
     }
 
     private func isInvalidCachedDetail(_ cachedThread: Thread) -> Bool {

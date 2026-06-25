@@ -380,6 +380,59 @@ class DiscourseService: ForumService {
         }
     }
 
+    private struct DiscourseSearchResponse: Decodable {
+        let topics: [DiscourseSearchTopic]
+        let posts: [DiscourseSearchPost]
+        let groupedSearchResult: DiscourseGroupedSearchResult?
+
+        enum CodingKeys: String, CodingKey {
+            case topics, posts
+            case groupedSearchResult = "grouped_search_result"
+        }
+    }
+
+    private struct DiscourseSearchTopic: Decodable {
+        let id: Int
+        let title: String
+        let createdAt: String?
+        let postsCount: Int?
+        let likeCount: Int?
+        let categoryId: Int?
+        let tags: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case id, title, tags
+            case createdAt = "created_at"
+            case postsCount = "posts_count"
+            case likeCount = "like_count"
+            case categoryId = "category_id"
+        }
+    }
+
+    private struct DiscourseSearchPost: Decodable {
+        let topicId: Int?
+        let userId: Int?
+        let username: String?
+        let avatarTemplate: String?
+        let blurb: String?
+        let cooked: String?
+
+        enum CodingKeys: String, CodingKey {
+            case username, blurb, cooked
+            case topicId = "topic_id"
+            case userId = "user_id"
+            case avatarTemplate = "avatar_template"
+        }
+    }
+
+    private struct DiscourseGroupedSearchResult: Decodable {
+        let moreResults: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case moreResults = "more_results"
+        }
+    }
+
     // Helper for decoding mixed-type JSON values
     struct AnyCodable: Codable {
         let value: Any
@@ -484,6 +537,90 @@ class DiscourseService: ForumService {
     }
 
     // MARK: - Fetching
+
+    func searchThreads(query: String, page: Int) async throws -> ([Thread], Bool) {
+        guard await restoreSession() else {
+            throw URLError(.userAuthenticationRequired)
+        }
+        return try await searchThreadsUsingAPI(query: query, page: page)
+    }
+
+    private func searchThreadsUsingAPI(query: String, page: Int) async throws -> ([Thread], Bool) {
+
+        var components = URLComponents(string: "\(baseURL)/search/query")
+        components?.queryItems = [
+            URLQueryItem(name: "term", value: query),
+            URLQueryItem(name: "page", value: String(page))
+        ]
+        guard let url = components?.url else {
+            throw URLError(.badURL)
+        }
+
+        var request = authorizedRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let httpResponse = response as? HTTPURLResponse {
+            guard httpResponse.statusCode != 403 else {
+                throw URLError(.userAuthenticationRequired)
+            }
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                throw URLError(.badServerResponse)
+            }
+        }
+
+        let searchResponse = try JSONDecoder().decode(DiscourseSearchResponse.self, from: data)
+        let postsByTopicID = Dictionary(
+            searchResponse.posts.compactMap { post -> (Int, DiscourseSearchPost)? in
+                guard let topicID = post.topicId else { return nil }
+                return (topicID, post)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        let threads = searchResponse.topics.map { topic -> Thread in
+            let post = postsByTopicID[topic.id]
+            let avatarPath = (post?.avatarTemplate ?? "/user_avatar/linux.do/system/{size}/1.png")
+                .replacingOccurrences(of: "{size}", with: "64")
+            let avatarURL = avatarPath.hasPrefix("http") ? avatarPath : "\(baseURL)\(avatarPath)"
+
+            return Thread(
+                id: String(topic.id),
+                title: topic.title.decodingHTMLEntities(),
+                content: cleanSearchPreview(post?.blurb ?? post?.cooked ?? ""),
+                author: User(
+                    id: String(post?.userId ?? 0),
+                    username: post?.username ?? "Unknown",
+                    avatar: avatarURL,
+                    role: nil
+                ),
+                community: Community(
+                    id: String(topic.categoryId ?? 0),
+                    name: "Search",
+                    description: "",
+                    category: "linux_do",
+                    activeToday: 0,
+                    onlineNow: 0
+                ),
+                timeAgo: topic.createdAt.map(calculateTimeAgo(from:)) ?? "",
+                likeCount: topic.likeCount ?? 0,
+                commentCount: max(0, (topic.postsCount ?? 1) - 1),
+                isLiked: false,
+                tags: topic.tags
+            )
+        }
+
+        let hasMore = searchResponse.groupedSearchResult?.moreResults ?? (threads.count >= 20)
+        AppLogger.debug("[Discourse] Search query returned \(threads.count) topics for \(query)")
+        return (threads, hasMore)
+    }
+
+    private func cleanSearchPreview(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .decodingHTMLEntities()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     func fetchCategories() async throws -> [Community] {
         // Use "latest" as the primary feed since linux.do requires auth for category pages
