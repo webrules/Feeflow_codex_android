@@ -413,7 +413,9 @@ struct ThreadRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            footer
+            if footerHasContent {
+                footer
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 13)
@@ -458,6 +460,14 @@ struct ThreadRow: View {
         }
     }
 
+    private var footerHasContent: Bool {
+        let showInlineMeta = ["4d4y", "v2ex", "linux_do"].contains(service.id)
+        if !isRSS && !showInlineMeta { return true }            // avatar + comment pill
+        if !metadata.isEmpty { return true }                    // metadata text
+        if thread.likeCount > 0 && service.id != "linux_do" { return true } // like pill
+        return false
+    }
+
     private var footer: some View {
         HStack(spacing: 8) {
             let showInlineMeta = ["4d4y", "v2ex", "linux_do"].contains(service.id)
@@ -472,7 +482,7 @@ struct ThreadRow: View {
 
             Spacer(minLength: 8)
 
-            if thread.likeCount > 0 {
+            if thread.likeCount > 0 && service.id != "linux_do" {
                 ThreadMetricPill(icon: "hand.thumbsup", text: "\(thread.likeCount)")
             }
 

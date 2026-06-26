@@ -916,7 +916,7 @@ class DiscourseService: ForumService {
                 if let altRange = Range(match.range(at: 1), in: processed),
                    let fullMatchRange = Range(match.range, in: processed) {
                     let altText = String(processed[altRange])
-                    processed.replaceSubrange(fullMatchRange, with: altText)
+                    processed.replaceSubrange(fullMatchRange, with: Self.emojiForShortcode(altText))
                 }
             }
         } catch {
@@ -966,6 +966,21 @@ class DiscourseService: ForumService {
             .replacingOccurrences(of: "&#8212;", with: "--")
             .replacingOccurrences(of: "&hellip;", with: "...")
 
+        // 4.5 Convert any remaining :shortcode: emoji that appear as plain text
+        if let scRegex = try? NSRegularExpression(pattern: ":([a-z0-9_+-]+):", options: .caseInsensitive) {
+            let range = NSRange(processed.startIndex..., in: processed)
+            let matches = scRegex.matches(in: processed, range: range)
+            for match in matches.reversed() {
+                if let scRange = Range(match.range(at: 1), in: processed),
+                   let fullRange = Range(match.range, in: processed) {
+                    let code = String(processed[scRange]).lowercased()
+                    if let emoji = Self.emojiMap[code] {
+                        processed.replaceSubrange(fullRange, with: emoji)
+                    }
+                }
+            }
+        }
+
         // 5. Spacing
         if let newlineRegex = try? NSRegularExpression(pattern: "(\\s*\\n\\s*){3,}", options: []) {
             processed = newlineRegex.stringByReplacingMatches(in: processed, range: NSRange(processed.startIndex..., in: processed), withTemplate: "\n\n")
@@ -977,4 +992,85 @@ class DiscourseService: ForumService {
 
         return processed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Convert a Discourse emoji alt/shortcode (e.g. ":sweat_smile:" or
+    /// "sweat_smile") to its Unicode emoji. If the alt is already an emoji
+    /// character, or the shortcode is unknown, returns it unchanged.
+    static func emojiForShortcode(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        let code = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ":")).lowercased()
+        if let emoji = emojiMap[code] {
+            return emoji
+        }
+        // Discourse sometimes provides the literal emoji as the alt text.
+        if !trimmed.hasPrefix(":") {
+            return trimmed
+        }
+        return trimmed
+    }
+
+    static let emojiMap: [String: String] = [
+        "smile": "😄", "smiley": "😃", "grinning": "😀", "grin": "😁",
+        "laughing": "😆", "satisfied": "😆", "sweat_smile": "😅", "rofl": "🤣",
+        "rolling_on_the_floor_laughing": "🤣", "joy": "😂", "slightly_smiling_face": "🙂",
+        "upside_down_face": "🙃", "wink": "😉", "blush": "😊", "innocent": "😇",
+        "smiling_face_with_three_hearts": "🥰", "heart_eyes": "😍",
+        "star_struck": "🤩", "kissing_heart": "😘", "kissing": "😗",
+        "kissing_smiling_eyes": "😙", "kissing_closed_eyes": "😚",
+        "yum": "😋", "stuck_out_tongue": "😛", "stuck_out_tongue_winking_eye": "😜",
+        "zany_face": "🤪", "stuck_out_tongue_closed_eyes": "😝", "money_mouth_face": "🤑",
+        "hugs": "🤗", "hand_over_mouth": "🤭", "shushing_face": "🤫",
+        "thinking": "🤔", "zipper_mouth_face": "🤐", "raised_eyebrow": "🤨",
+        "neutral_face": "😐", "expressionless": "😑", "no_mouth": "😶",
+        "smirk": "😏", "unamused": "😒", "roll_eyes": "🙄", "grimacing": "😬",
+        "lying_face": "🤥", "relieved": "😌", "pensive": "😔", "sleepy": "😪",
+        "drooling_face": "🤤", "sleeping": "😴", "mask": "😷",
+        "face_with_thermometer": "🤒", "face_with_head_bandage": "🤕",
+        "nauseated_face": "🤢", "vomiting_face": "🤮", "sneezing_face": "🤧",
+        "hot_face": "🥵", "cold_face": "🥶", "woozy_face": "🥴",
+        "dizzy_face": "😵", "face_with_spiral_eyes": "😵‍💫",
+        "exploding_head": "🤯", "cowboy_hat_face": "🤠", "partying_face": "🥳",
+        "sunglasses": "😎", "nerd_face": "🤓", "monocle_face": "🧐",
+        "confused": "😕", "worried": "😟", "slightly_frowning_face": "🙁",
+        "frowning_face": "☹️", "open_mouth": "😮", "hushed": "😯",
+        "astonished": "😲", "flushed": "😳", "pleading_face": "🥺",
+        "frowning": "😦", "anguished": "😧", "fearful": "😨", "cold_sweat": "😰",
+        "disappointed_relieved": "😥", "cry": "😢", "sob": "😭", "scream": "😱",
+        "confounded": "😖", "persevere": "😣", "disappointed": "😞",
+        "sweat": "😓", "weary": "😩", "tired_face": "😫", "yawning_face": "🥱",
+        "triumph": "😤", "rage": "😡", "pout": "😡", "angry": "😠",
+        "cursing_face": "🤬", "smiling_imp": "😈", "imp": "👿",
+        "skull": "💀", "skull_and_crossbones": "☠️", "poop": "💩", "hankey": "💩",
+        "clown_face": "🤡", "ghost": "👻", "alien": "👽", "robot": "🤖",
+        "smiley_cat": "😺", "heart": "❤️", "orange_heart": "🧡",
+        "yellow_heart": "💛", "green_heart": "💚", "blue_heart": "💙",
+        "purple_heart": "💜", "black_heart": "🖤", "broken_heart": "💔",
+        "two_hearts": "💕", "sparkling_heart": "💖", "heartpulse": "💗",
+        "thumbsup": "👍", "+1": "👍", "thumbsdown": "👎", "-1": "👎",
+        "ok_hand": "👌", "v": "✌️", "crossed_fingers": "🤞", "fist": "✊",
+        "facepunch": "👊", "punch": "👊", "wave": "👋", "raised_hand": "✋",
+        "raised_hands": "🙌", "open_hands": "👐", "pray": "🙏", "clap": "👏",
+        "muscle": "💪", "point_up": "☝️", "point_down": "👇", "point_left": "👈",
+        "point_right": "👉", "writing_hand": "✍️", "eyes": "👀",
+        "fire": "🔥", "sparkles": "✨", "star": "⭐", "star2": "🌟",
+        "boom": "💥", "tada": "🎉", "confetti_ball": "🎊", "balloon": "🎈",
+        "gift": "🎁", "trophy": "🏆", "medal_sports": "🏅", "first_place_medal": "🥇",
+        "100": "💯", "warning": "⚠️", "white_check_mark": "✅", "heavy_check_mark": "✔️",
+        "x": "❌", "negative_squared_cross_mark": "❎", "question": "❓",
+        "exclamation": "❗", "bangbang": "‼️", "zzz": "💤", "dizzy": "💫",
+        "rocket": "🚀", "bulb": "💡", "moneybag": "💰", "gem": "💎",
+        "bell": "🔔", "lock": "🔒", "key": "🔑", "hammer": "🔨",
+        "wrench": "🔧", "gear": "⚙️", "bug": "🐛", "computer": "💻",
+        "iphone": "📱", "email": "📧", "books": "📚", "memo": "📝",
+        "pushpin": "📌", "calendar": "📅", "chart_with_upwards_trend": "📈",
+        "chart_with_downwards_trend": "📉", "coffee": "☕", "beer": "🍺",
+        "beers": "🍻", "cake": "🍰", "birthday": "🎂", "pizza": "🍕",
+        "sweat_drops": "💦", "thought_balloon": "💭", "speech_balloon": "💬",
+        "ok": "🆗", "cool": "🆒", "new": "🆕", "sos": "🆘", "up": "🆙",
+        "checkered_flag": "🏁", "crown": "👑", "ring": "💍",
+        "see_no_evil": "🙈", "hear_no_evil": "🙉", "speak_no_evil": "🙊",
+        "raising_hand": "🙋", "shrug": "🤷", "facepalm": "🤦",
+        "man_facepalming": "🤦‍♂️", "woman_facepalming": "🤦‍♀️",
+        "person_shrugging": "🤷", "bowing_man": "🙇", "bow": "🙇"
+    ]
 }
