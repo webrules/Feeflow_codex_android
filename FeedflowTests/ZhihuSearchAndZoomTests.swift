@@ -48,6 +48,27 @@ final class ZhihuSearchAvatarTests: XCTestCase {
         let name = ""
         XCTAssertEqual(name.isEmpty ? "匿名用户" : name, "匿名用户")
     }
+
+    // Zhihu nests comment authors under `author.member`; decoding must reach the
+    // name + avatar so repliers don't all show as 匿名.
+    func testCommentAuthorDecodedFromNestedMember() throws {
+        let json = """
+        {"id":"c1","content":"hi","author":{"role":"normal","member":{"id":"m1","name":"wwww2021","avatar_url":"https://picx.zhimg.com/v2-x.jpg","headline":"hi"}}}
+        """.data(using: .utf8)!
+        let c = try JSONDecoder().decode(ZhihuComment.self, from: json)
+        XCTAssertEqual(c.author?.name, "wwww2021")
+        XCTAssertEqual(c.author?.id, "m1")
+        XCTAssertEqual(c.author?.avatarUrl, "https://picx.zhimg.com/v2-x.jpg")
+    }
+
+    func testCommentAuthorDecodedFromFlatFallback() throws {
+        let json = """
+        {"id":"c2","content":"hi","author":{"id":"u2","name":"flatUser","avatar_url":"https://p/y.jpg"}}
+        """.data(using: .utf8)!
+        let c = try JSONDecoder().decode(ZhihuComment.self, from: json)
+        XCTAssertEqual(c.author?.name, "flatUser")
+        XCTAssertEqual(c.author?.avatarUrl, "https://p/y.jpg")
+    }
 }
 
 final class ImageZoomClampTests: XCTestCase {

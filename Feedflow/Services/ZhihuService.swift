@@ -452,12 +452,12 @@ struct ZhihuAnswerDetail: Codable {
 }
 
 /// Response from Zhihu's comment API
-struct ZhihuCommentResponse: Codable {
+struct ZhihuCommentResponse: Decodable {
     let data: [ZhihuComment]?
     let paging: ZhihuPaging?
 }
 
-struct ZhihuComment: Codable {
+struct ZhihuComment: Decodable {
     let id: String?
     let type: String?
     let content: String?
@@ -501,7 +501,7 @@ struct ZhihuComment: Codable {
     }
 }
 
-struct ZhihuCommentAuthor: Codable {
+struct ZhihuCommentAuthor: Decodable {
     let id: String?
     let name: String?
     let avatarUrl: String?
@@ -509,24 +509,29 @@ struct ZhihuCommentAuthor: Codable {
     let headline: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, headline
+        case id, name, headline, member
         case avatarUrl = "avatar_url"
         case avatarUrlTemplate = "avatar_url_template"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let strId = try? container.decode(String.self, forKey: .id) {
-            self.id = strId
-        } else if let intId = try? container.decode(Int.self, forKey: .id) {
-            self.id = String(intId)
-        } else {
-            self.id = nil
+        // Zhihu comment authors nest the user under `member`; older/flat
+        // responses keep the fields at the top level. Prefer member, fall back.
+        let member = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .member)
+
+        func decodeId(_ c: KeyedDecodingContainer<CodingKeys>?) -> String? {
+            guard let c else { return nil }
+            if let s = try? c.decode(String.self, forKey: .id) { return s }
+            if let i = try? c.decode(Int.self, forKey: .id) { return String(i) }
+            return nil
         }
-        self.name = try container.decodeIfPresent(String.self, forKey: .name)
-        self.avatarUrl = try container.decodeIfPresent(String.self, forKey: .avatarUrl)
-        self.avatarUrlTemplate = try container.decodeIfPresent(String.self, forKey: .avatarUrlTemplate)
-        self.headline = try container.decodeIfPresent(String.self, forKey: .headline)
+
+        self.id = decodeId(member) ?? decodeId(container)
+        self.name = (try? member?.decodeIfPresent(String.self, forKey: .name)) ?? (try? container.decodeIfPresent(String.self, forKey: .name)) ?? nil
+        self.avatarUrl = (try? member?.decodeIfPresent(String.self, forKey: .avatarUrl)) ?? (try? container.decodeIfPresent(String.self, forKey: .avatarUrl)) ?? nil
+        self.avatarUrlTemplate = (try? member?.decodeIfPresent(String.self, forKey: .avatarUrlTemplate)) ?? (try? container.decodeIfPresent(String.self, forKey: .avatarUrlTemplate)) ?? nil
+        self.headline = (try? member?.decodeIfPresent(String.self, forKey: .headline)) ?? (try? container.decodeIfPresent(String.self, forKey: .headline)) ?? nil
     }
 }
 
