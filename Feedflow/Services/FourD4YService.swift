@@ -557,17 +557,26 @@ class FourD4YService: ForumService {
                 title = String(rowContent[titleTextRange]).decodingHTMLEntities()
             }
 
-            // Extract author from <td class="author"><a>authorname</a> within this row
+            // Extract author + UID from <td class="author"><a href="space.php?uid=123">authorname</a> within this row
             var authorName = "Unknown"
-            if let authorRegex = try? NSRegularExpression(pattern: "<td\\s+class=\"author\"[^>]*>.*?<a[^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
+            var authorUID: String? = nil
+            if let authorRegex = try? NSRegularExpression(pattern: "<td\\s+class=\"author\"[^>]*>.*?<a[^>]+href=[\"\']space\\.php\\?uid=(\\d+)[^\"\']*[\"\'][^>]*>([^<]+)</a>", options: [.caseInsensitive, .dotMatchesLineSeparators]),
                let authorMatch = authorRegex.firstMatch(in: rowContent, options: [], range: NSRange(rowContent.startIndex..., in: rowContent)),
-               let authorTextRange = Range(authorMatch.range(at: 1), in: rowContent) {
+               let uidRange = Range(authorMatch.range(at: 1), in: rowContent),
+               let authorTextRange = Range(authorMatch.range(at: 2), in: rowContent) {
+                authorUID = String(rowContent[uidRange])
                 authorName = String(rowContent[authorTextRange]).trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            let authorAvatar = extractAvatarURL(from: rowContent)
-            let resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
-                ? extractAvatarURLFromAuthorUid(in: rowContent)
-                : authorAvatar
+            // Build avatar from UID (same approach as thread detail WAP parsing)
+            let resolvedAuthorAvatar: String
+            if let uid = authorUID {
+                resolvedAuthorAvatar = avatarURL(forUID: uid)
+            } else {
+                let authorAvatar = extractAvatarURL(from: rowContent)
+                resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
+                    ? extractAvatarURLFromAuthorUid(in: rowContent)
+                    : authorAvatar
+            }
 
             // Extract reply count from <td class="nums"><strong>count</strong> within this row
             var replyCount = 0
@@ -660,10 +669,16 @@ class FourD4YService: ForumService {
 
             let context = surroundingHTMLBlock(in: html, around: match.range)
             let authorName = extractThreadListAuthor(from: context) ?? "Unknown"
-            let authorAvatar = extractAvatarURL(from: context)
-            let resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
-                ? extractAvatarURLFromAuthorUid(in: context)
-                : authorAvatar
+            // Try to extract UID from author link for reliable avatar (same approach as detail page)
+            let resolvedAuthorAvatar: String
+            if let uid = extractUIDFromContext(context) {
+                resolvedAuthorAvatar = avatarURL(forUID: uid)
+            } else {
+                let authorAvatar = extractAvatarURL(from: context)
+                resolvedAuthorAvatar = isGenericAvatar(authorAvatar)
+                    ? extractAvatarURLFromAuthorUid(in: context)
+                    : authorAvatar
+            }
 
             threads.append(Thread(
                 id: tid,
@@ -686,7 +701,7 @@ class FourD4YService: ForumService {
 
     private func cleanThreadListTitle(_ html: String) -> String {
         cleanContent(html)
-            .replacingOccurrences(of: "\\[LINK:[^\\]]+\\|([^\\]]+)\\]", with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: "\\[LINK:[^|\\]]+\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]", with: "$1", options: .regularExpression)
             .replacingOccurrences(of: "\\[IMAGE:[^\\]]+\\]", with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -727,6 +742,25 @@ class FourD4YService: ForumService {
             }
         }
 
+        return nil
+    }
+
+    /// Extract author UID from space.php?uid=XXXXX link in thread list HTML
+    func extractUIDFromContext(_ html: String) -> String? {
+        let patterns = [
+            "space\\.php\\?uid=(\\d+)",
+            "uid=(\\d+)",
+        ]
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+               let match = regex.firstMatch(in: html, options: [], range: NSRange(html.startIndex..., in: html)),
+               let range = Range(match.range(at: 1), in: html) {
+                let uid = String(html[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !uid.isEmpty {
+                    return uid
+                }
+            }
+        }
         return nil
     }
 
@@ -1153,7 +1187,10 @@ class FourD4YService: ForumService {
     }
 
     private func cleanThreadDetailTitle(_ html: String) -> String {
-       var title = cleanContent(html).trimmingCharacters(in: .whitespacesAndNewlines)
+       var title = cleanContent(html)
+           .replacingOccurrences(of: "\\[LINK:[^|\\]]+\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]", with: "$1", options: .regularExpression)
+           .replacingOccurrences(of: "\\[IMAGE:[^\\]]+\\]", with: "", options: .regularExpression)
+           .trimmingCharacters(in: .whitespacesAndNewlines)
        if let suffixRange = title.range(of: " - ") {
            title = String(title[..<suffixRange.lowerBound])
        }
@@ -1337,7 +1374,7 @@ class FourD4YService: ForumService {
         return "person.circle"
     }
 
-    private func avatarURL(forUID uid: String) -> String {
+    func avatarURL(forUID uid: String) -> String {
         let trimmedUID = uid.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let numericUID = Int(trimmedUID) else {
             return "person.circle"
@@ -1677,6 +1714,34 @@ class FourD4YService: ForumService {
         processed = processed.replacingOccurrences(of: "<br />", with: "\n")
         processed = processed.replacingOccurrences(of: "<br>", with: "\n")
         processed = processed.replacingOccurrences(of: "</p>", with: "\n\n")
+
+        // 2.1. Handle blockquotes: wrap in [QUOTE] markers, strip inner <a> links
+        do {
+            let bqRegex = try NSRegularExpression(
+                pattern: "<blockquote[^>]*>(.*?)</blockquote>",
+                options: [.caseInsensitive, .dotMatchesLineSeparators]
+            )
+            let bqMatches = bqRegex.matches(in: processed, range: NSRange(processed.startIndex..., in: processed))
+            for match in bqMatches.reversed() {
+                guard let innerRange = Range(match.range(at: 1), in: processed),
+                      let fullRange = Range(match.range, in: processed) else { continue }
+                var inner = String(processed[innerRange])
+                // Strip <a> tags inside blockquote: keep text, discard link
+                inner = inner.replacingOccurrences(
+                    of: "<a[^>]+>",
+                    with: "",
+                    options: .regularExpression
+                )
+                inner = inner.replacingOccurrences(
+                    of: "</a>",
+                    with: "",
+                    options: .caseInsensitive
+                )
+                processed.replaceSubrange(fullRange, with: "\n[QUOTE]\(inner)[/QUOTE]\n")
+            }
+        } catch {
+            AppLogger.debug("Regex error (blockquotes): \(error)")
+        }
 
         // 2.5. Extract links (<a href="...">) before stripping tags
         // Preserve as [LINK:url|title] so LinkedTextView can render titled links

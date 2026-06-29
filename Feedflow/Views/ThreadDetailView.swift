@@ -338,7 +338,7 @@ struct ThreadDetailView: View {
     }
 
     private var threadNavigationControls: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 28) {
             Button(action: goToPreviousThread) {
                 FeedflowSymbol(
                     name: "chevron.up",
@@ -365,9 +365,8 @@ struct ThreadDetailView: View {
             .buttonStyle(.plain)
             .disabled(!viewModel.hasNextThread || viewModel.isLoading)
         }
-        .padding(.trailing, 14)
-        .padding(.bottom, canReply ? 154 : 82)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
     }
 
     private func goToPreviousThread() {
@@ -509,7 +508,7 @@ struct LinkedTextView: View {
         var segments: [TextSegment] = []
 
         // Step 1: Split on [LINK:url|title] markers
-        let linkPattern = "\\[LINK:([^|\\]]+)\\|([^\\]]+)\\]"
+        let linkPattern = "\\[LINK:([^|\\]]+)\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
         guard let linkRegex = try? NSRegularExpression(pattern: linkPattern, options: []) else {
             return detectRawURLs(in: text)
         }
@@ -600,6 +599,22 @@ struct ParsedContentView: View {
                         LinkedTextView(text: content)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                case .quote(let quoteContent):
+                    if !quoteContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        LinkedTextView(text: quoteContent)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(10)
+                            .background(Color.gray.opacity(0.12))
+                            .cornerRadius(8)
+                            .overlay(
+                                Rectangle()
+                                    .fill(Color.gray.opacity(0.35))
+                                    .frame(width: 3)
+                                    .cornerRadius(1.5),
+                                alignment: .leading
+                            )
+                            .padding(.leading, 4)
+                    }
                 case .image(let url):
                     AsyncImage(url: URL(string: url)) { phase in
                         switch phase {
@@ -642,6 +657,7 @@ struct ParsedContentView: View {
     enum ContentBlock: Hashable {
         case text(String)
         case image(String)
+        case quote(String)
     }
 
     private func parseBlocks(from text: String) -> [ContentBlock] {
@@ -680,7 +696,42 @@ struct ParsedContentView: View {
                 }
             }
         }
-        return blocks
+        // Second pass: split text blocks on [QUOTE] markers
+        var quoteExpandedBlocks: [ContentBlock] = []
+        for block in blocks {
+            switch block {
+            case .text(let textContent):
+                let parts = textContent.components(separatedBy: "[QUOTE]")
+                for (i, part) in parts.enumerated() {
+                    if i == 0 {
+                        let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            quoteExpandedBlocks.append(.text(trimmed))
+                        }
+                    } else {
+                        if let endRange = part.range(of: "[/QUOTE]") {
+                            let quoteContent = String(part[..<endRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !quoteContent.isEmpty {
+                                quoteExpandedBlocks.append(.quote(quoteContent))
+                            }
+                            let after = String(part[endRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !after.isEmpty {
+                                quoteExpandedBlocks.append(.text(after))
+                            }
+                        } else {
+                            // Missing [/QUOTE] — treat as text
+                            let trimmed = ("[QUOTE]" + part).trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                quoteExpandedBlocks.append(.text(trimmed))
+                            }
+                        }
+                    }
+                }
+            default:
+                quoteExpandedBlocks.append(block)
+            }
+        }
+        return quoteExpandedBlocks
     }
 
     private func normalizedImageKey(_ rawURL: String) -> String {

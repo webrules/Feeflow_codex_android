@@ -645,6 +645,242 @@ final class PerSiteServiceTests: XCTestCase {
         XCTAssertEqual(cases[4], .linuxDo)
         XCTAssertEqual(cases[5], .zhihu)
     }
+
+    // MARK: - Avatar UID Extraction (4D4Y)
+
+    func testAvatarURLForUIDSimple() {
+        let service = FourD4YService()
+        let url = service.avatarURL(forUID: "12345")
+        XCTAssertTrue(url.contains("uc_server/data/avatar"), "URL should be a Discuz avatar path")
+        XCTAssertTrue(url.contains("_avatar_middle.jpg"), "URL should use middle size avatar")
+        XCTAssertTrue(url.hasPrefix("https://img02.4d4y.com/forum/"), "URL should use 4d4y CDN")
+    }
+
+    func testAvatarURLForUIDPadding() {
+        let service = FourD4YService()
+        let url = service.avatarURL(forUID: "1")
+        XCTAssertTrue(url.contains("000/00/00/01_avatar_middle.jpg"), "UID 1 should be zero-padded to 9 digits")
+    }
+
+    func testAvatarURLForUIDLargeNumber() {
+        let service = FourD4YService()
+        let url = service.avatarURL(forUID: "999999999")
+        XCTAssertTrue(url.contains("999/99/99/99_avatar_middle.jpg"), "Large UID should be correctly grouped")
+    }
+
+    func testAvatarURLForInvalidUID() {
+        let service = FourD4YService()
+        let url = service.avatarURL(forUID: "not-a-number")
+        XCTAssertEqual(url, "person.circle", "Non-numeric UID should return fallback")
+    }
+
+    func testAvatarURLForEmptyUID() {
+        let service = FourD4YService()
+        let url = service.avatarURL(forUID: "  ")
+        XCTAssertEqual(url, "person.circle", "Whitespace-only UID should return fallback")
+    }
+
+    func testExtractUIDFromSpaceLink() {
+        let service = FourD4YService()
+        let html = #"<td class="author"><a href="space.php?uid=67890">someuser</a></td>"#
+        let uid = service.extractUIDFromContext(html)
+        XCTAssertEqual(uid, "67890", "Should extract UID from space.php?uid= link")
+    }
+
+    func testExtractUIDFromGenericUIDParam() {
+        let service = FourD4YService()
+        let html = #"<a href="member.php?action=profile&uid=54321">otheruser</a>"#
+        let uid = service.extractUIDFromContext(html)
+        XCTAssertEqual(uid, "54321", "Should extract UID from generic uid= parameter")
+    }
+
+    func testExtractUIDNoUIDPresent() {
+        let service = FourD4YService()
+        let html = #"<td class="author"><a href="profile.php?id=abc">nouser</a></td>"#
+        let uid = service.extractUIDFromContext(html)
+        XCTAssertNil(uid, "Should return nil when no UID pattern matches")
+    }
+
+    func testExtractUIDFromThreadListRowHTML() {
+        let service = FourD4YService()
+        let rowHTML = """
+        <td class="author">
+            <cite><a href="space.php?uid=123456">testuser</a></cite>
+            <em>2025-1-1</em>
+        </td>
+        """
+        let uid = service.extractUIDFromContext(rowHTML)
+        XCTAssertEqual(uid, "123456", "Should extract UID from realistic thread list row HTML")
+    }
+
+    func testFullAvatarFlowFromRowHTML() {
+        let service = FourD4YService()
+        let rowHTML = #"<td class="author"><cite><a href="space.php?uid=77777">avataruser</a></cite></td>"#
+        guard let uid = service.extractUIDFromContext(rowHTML) else {
+            XCTFail("Should have extracted a UID")
+            return
+        }
+        let avatarURL = service.avatarURL(forUID: uid)
+        XCTAssertTrue(avatarURL.contains("000/07/77/77_avatar_middle.jpg"),
+                      "Avatar URL should be correctly constructed from extracted UID. Got: \(avatarURL)")
+    }
+
+
+    // MARK: - LINK Marker Parsing (bracketed titles)
+
+    func testLinkRegexBracketedTitle() {
+        let pattern = "\\[LINK:([^|\\]]+)\\|(.+)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let text = "[LINK:forumdisplay.php?fid=2&filter=type&typeid=38|[大杂烩]]"
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else {
+            XCTFail("Regex should match bracketed title")
+            return
+        }
+        let url = String(text[Range(match.range(at: 1), in: text)!])
+        let title = String(text[Range(match.range(at: 2), in: text)!])
+        XCTAssertEqual(url, "forumdisplay.php?fid=2&filter=type&typeid=38")
+        XCTAssertEqual(title, "[大杂烩]", "Title should include both brackets")
+        // Verify no leftover trailing text
+        let remaining = String(text[Range(NSRange(location: match.range.location + match.range.length, length: text.utf16.count - (match.range.location + match.range.length)), in: text)!])
+        XCTAssertTrue(remaining.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "No trailing text expected")
+    }
+
+    func testLinkRegexSimpleTitle() {
+        let pattern = "\\[LINK:([^|\\]]+)\\|(.+)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let text = "[LINK:https://example.com|Simple Title]"
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else {
+            XCTFail("Regex should match simple title")
+            return
+        }
+        let url = String(text[Range(match.range(at: 1), in: text)!])
+        let title = String(text[Range(match.range(at: 2), in: text)!])
+        XCTAssertEqual(url, "https://example.com")
+        XCTAssertEqual(title, "Simple Title")
+    }
+
+    func testLinkRegexNestedBrackets() {
+        // Note: NSRegularExpression doesn't support recursive bracket matching.
+        // Single-level [bracket pairs] are correctly captured; deeply nested
+        // brackets will have the outermost closing bracket treated as the LINK closer.
+        let pattern = "\\[LINK:([^|\\]]+)\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        // Single-level bracket pairs work perfectly
+        let text1 = "[LINK:https://example.com|[Tag]]"
+        let m1 = regex.firstMatch(in: text1, range: NSRange(text1.startIndex..., in: text1))!
+        let t1 = String(text1[Range(m1.range(at: 2), in: text1)!])
+        XCTAssertEqual(t1, "[Tag]", "Single-level brackets should be preserved")
+        // Verify no trailing leftover
+        let remaining = String(text1[Range(NSRange(location: m1.range.location + m1.range.length, length: text1.utf16.count - (m1.range.location + m1.range.length)), in: text1)!])
+        XCTAssertTrue(remaining.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "No trailing text expected")
+    }
+
+    func testLinkRegexWithSurroundingText() {
+        let pattern = "\\[LINK:([^|\\]]+)\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let text = "Text before [LINK:https://a.com|Tag] text after"
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, range: range) else {
+            XCTFail("Regex should match link with surrounding text")
+            return
+        }
+        let url = String(text[Range(match.range(at: 1), in: text)!])
+        let title = String(text[Range(match.range(at: 2), in: text)!])
+        XCTAssertEqual(url, "https://a.com")
+        XCTAssertEqual(title, "Tag")
+    }
+
+    func testLinkRegexMultipleBracketedTitles() {
+        let pattern = "\\[LINK:([^|\\]]+)\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let text = "[LINK:/fid=1|Tag1] [LINK:/fid=2|[Tag2]] [LINK:/fid=3|Tag3]"
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        XCTAssertEqual(matches.count, 3, "Should find all three links")
+        let titles = matches.compactMap { m -> String? in
+            guard let r = Range(m.range(at: 2), in: text) else { return nil }
+            return String(text[r])
+        }
+        XCTAssertEqual(titles, ["Tag1", "[Tag2]", "Tag3"])
+    }
+
+
+    // MARK: - Blockquote & Title LINK Stripping
+
+    func testBlockquoteRegexMatches() {
+        let pattern = "<blockquote[^>]*>(.*?)</blockquote>"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let html = "<blockquote>Quoted text here</blockquote>"
+        let range = NSRange(html.startIndex..., in: html)
+        guard let match = regex.firstMatch(in: html, range: range) else {
+            XCTFail("Should match blockquote")
+            return
+        }
+        let inner = String(html[Range(match.range(at: 1), in: html)!])
+        XCTAssertEqual(inner, "Quoted text here")
+    }
+
+    func testBlockquoteWithAttributesRegex() {
+        let pattern = "<blockquote[^>]*>(.*?)</blockquote>"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let html = ##"<blockquote class="quote"><font color="#666">cited text</font></blockquote>"##
+        let range = NSRange(html.startIndex..., in: html)
+        guard let match = regex.firstMatch(in: html, range: range) else {
+            XCTFail("Should match blockquote with attributes")
+            return
+        }
+        let inner = String(html[Range(match.range(at: 1), in: html)!])
+        XCTAssertTrue(inner.contains("cited text"))
+    }
+
+    func testBlockquoteLinkStripping() {
+        // Links inside blockquotes should be stripped to plain text
+        let before = #"<a href="https://example.com">link text</a> and more"#
+        let after = before
+            .replacingOccurrences(of: "<a[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "</a>", with: "", options: .caseInsensitive)
+        XCTAssertEqual(after, "link text and more")
+    }
+
+    func testTitleStripLINKMarkerSimple() {
+        // Strip [LINK:url|Simple Title] -> Simple Title
+        let pattern = "\\[LINK:[^|\\]]+\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let title = "[LINK:forumdisplay.php?fid=2|Simple Tag]"
+        let result = regex.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: "$1")
+        XCTAssertEqual(result, "Simple Tag")
+    }
+
+    func testTitleStripLINKMarkerBracketed() {
+        // Strip [LINK:url|[大杂烩]] -> [大杂烩]
+        let pattern = "\\[LINK:[^|\\]]+\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let title = "[LINK:forumdisplay.php?fid=2&filter=type&typeid=38|[大杂烩]]"
+        let result = regex.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: "$1")
+        XCTAssertEqual(result, "[大杂烩]", "Bracketed title should be preserved with both brackets")
+    }
+
+    func testTitleStripMultipleLINKMarkers() {
+        let pattern = "\\[LINK:[^|\\]]+\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let title = "[LINK:/fid=1|Tag1] [LINK:/fid=2|[Tag2]] and text"
+        let result = regex.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: "$1")
+        XCTAssertEqual(result, "Tag1 [Tag2] and text")
+    }
+
+    func testTitleFullCleanFlowBracketedTag() {
+        let service = FourD4YService()
+        // Simulate what cleanThreadDetailTitle does: cleanContent then strip markers
+        // Test that a title containing a link with bracketed text is properly cleaned
+        let pattern = "\\[LINK:[^|\\]]+\\|((?:\\[[^\\]]*\\]|[^\\]])*)\\]"
+        let regex = try! NSRegularExpression(pattern: pattern, options: [])
+        let raw = "[LINK:forumdisplay.php?fid=2&filter=type&typeid=38|[大杂烩]]"
+        let cleaned = regex.stringByReplacingMatches(in: raw, range: NSRange(raw.startIndex..., in: raw), withTemplate: "$1")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(cleaned, "[大杂烩]", "Full clean flow should preserve bracketed tag")
+    }
+
 }
 
 // MARK: - 11. Error Handling & Edge Cases (Extended)
