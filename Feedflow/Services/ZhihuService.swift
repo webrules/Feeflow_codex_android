@@ -1603,7 +1603,7 @@ class ZhihuService: ForumService {
         )
     }
 
-    private func normalizedAvatarURL(_ url: String?, template: String? = nil) -> String {
+    func normalizedAvatarURL(_ url: String?, template: String? = nil) -> String {
         let raw = (url?.isEmpty == false ? url : template) ?? ""
         var avatar = raw
             .replacingOccurrences(of: "&amp;", with: "&")

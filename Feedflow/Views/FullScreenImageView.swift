@@ -101,7 +101,7 @@ struct FullScreenImageView: View {
     private var zoomGesture: some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                scale = min(max(lastScale * value, minScale), maxScale)
+                scale = Self.clampScale(lastScale * value, min: minScale, max: maxScale)
             }
             .onEnded { _ in
                 lastScale = scale
@@ -111,6 +111,12 @@ struct FullScreenImageView: View {
                     }
                 }
             }
+    }
+
+    /// Clamp a proposed zoom factor to the supported range so pinch gestures
+    /// can never shrink below 1x or blow past the max.
+    static func clampScale(_ value: CGFloat, min minScale: CGFloat, max maxScale: CGFloat) -> CGFloat {
+        Swift.min(Swift.max(value, minScale), maxScale)
     }
 
     private var panGesture: some Gesture {
