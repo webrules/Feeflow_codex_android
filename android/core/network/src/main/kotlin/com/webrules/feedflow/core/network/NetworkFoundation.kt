@@ -17,6 +17,17 @@ data class FeedflowCookie(
 
 interface FeedflowHttpClient {
     suspend fun get(url: String, cookies: List<FeedflowCookie> = emptyList()): String
+    suspend fun get(
+        url: String,
+        cookies: List<FeedflowCookie>,
+        headers: Map<String, String>,
+    ): String = get(url, cookies)
+    suspend fun get(
+        url: String,
+        cookies: List<FeedflowCookie>,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String = get(url, cookies, headers)
     suspend fun post(
         url: String,
         body: String,
@@ -28,6 +39,16 @@ interface FeedflowHttpClient {
 class UnimplementedFeedflowHttpClient : FeedflowHttpClient {
     override suspend fun get(url: String, cookies: List<FeedflowCookie>): String =
         error("Network client is not wired yet for $url")
+
+    override suspend fun get(url: String, cookies: List<FeedflowCookie>, headers: Map<String, String>): String =
+        error("Network client is not wired yet for $url")
+
+    override suspend fun get(
+        url: String,
+        cookies: List<FeedflowCookie>,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String = error("Network client is not wired yet for $url")
 
     override suspend fun post(url: String, body: String, cookies: List<FeedflowCookie>, contentType: String): String =
         error("Network client is not wired yet for $url")
@@ -41,6 +62,16 @@ class UrlConnectionFeedflowHttpClient(
     override suspend fun get(url: String, cookies: List<FeedflowCookie>): String =
         request(url = url, method = "GET", body = null, cookies = cookies)
 
+    override suspend fun get(url: String, cookies: List<FeedflowCookie>, headers: Map<String, String>): String =
+        request(url = url, method = "GET", body = null, cookies = cookies, headers = headers)
+
+    override suspend fun get(
+        url: String,
+        cookies: List<FeedflowCookie>,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String = request(url = url, method = "GET", body = null, cookies = cookies, headers = headers, forcedCharset = forcedCharset)
+
     override suspend fun post(url: String, body: String, cookies: List<FeedflowCookie>, contentType: String): String =
         request(url = url, method = "POST", body = body, cookies = cookies, contentType = contentType)
 
@@ -50,6 +81,8 @@ class UrlConnectionFeedflowHttpClient(
         body: String?,
         cookies: List<FeedflowCookie>,
         contentType: String = "application/x-www-form-urlencoded; charset=UTF-8",
+        headers: Map<String, String> = emptyMap(),
+        forcedCharset: String? = null,
     ): String {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
@@ -58,6 +91,7 @@ class UrlConnectionFeedflowHttpClient(
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", userAgent)
             setRequestProperty("Accept", "text/html,application/json,application/xml,text/xml,*/*")
+            headers.forEach { (key, value) -> setRequestProperty(key, value) }
             CookieMatcher.matchingCookieHeader(url, cookies)?.let { setRequestProperty("Cookie", it) }
             if (body != null) {
                 doOutput = true
@@ -69,7 +103,9 @@ class UrlConnectionFeedflowHttpClient(
             val status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
-            val text = String(bytes, connection.responseCharset())
+            val charset = forcedCharset?.let { runCatching { Charset.forName(it) }.getOrNull() }
+                ?: connection.responseCharset(bytes)
+            val text = String(bytes, charset)
             if (status !in 200..299) {
                 throw HttpStatusException(url, status, text.take(500))
             }
@@ -79,10 +115,16 @@ class UrlConnectionFeedflowHttpClient(
         }
     }
 
-    private fun HttpURLConnection.responseCharset(): Charset {
+    private fun HttpURLConnection.responseCharset(body: ByteArray): Charset {
         val contentType = contentType.orEmpty()
-        val charset = Regex("""charset=([^;\s]+)""", RegexOption.IGNORE_CASE).find(contentType)?.groupValues?.get(1)
-        return runCatching { Charset.forName(charset ?: "UTF-8") }.getOrDefault(Charsets.UTF_8)
+        Regex("""charset=([^;\s]+)""", RegexOption.IGNORE_CASE).find(contentType)?.groupValues?.get(1)?.let { name ->
+            runCatching { Charset.forName(name) }.getOrNull()?.let { return it }
+        }
+        val head = String(body, 0, minOf(body.size, 2048), Charsets.ISO_8859_1)
+        Regex("""charset=["']?([\w-]+)""", RegexOption.IGNORE_CASE).find(head)?.groupValues?.get(1)?.let { name ->
+            runCatching { Charset.forName(name) }.getOrNull()?.let { return it }
+        }
+        return Charsets.UTF_8
     }
 }
 

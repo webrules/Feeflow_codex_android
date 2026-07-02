@@ -8,6 +8,14 @@ import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.model.User
 import com.webrules.feedflow.core.network.FeedflowHttpClient
 import com.webrules.feedflow.core.network.UnimplementedFeedflowHttpClient
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
@@ -77,7 +85,7 @@ fun ForumSite.makeService(
     ForumSite.FourD4Y -> FourD4YService(store, httpClient)
     ForumSite.V2ex -> V2exService(store, httpClient)
     ForumSite.LinuxDo -> DiscourseService(store, httpClient)
-    ForumSite.Zhihu -> ZhihuService(httpClient)
+    ForumSite.Zhihu -> ZhihuService(httpClient, store)
 }
 
 abstract class StaticForumService : ForumService {
@@ -352,6 +360,14 @@ class V2exService(
 
 private fun String.formEncode(): String = URLEncoder.encode(this, StandardCharsets.UTF_8.name())
 
+private fun String.gbkFormEncode(): String = FourD4YParser.encodeFormValue(this)
+
+internal val FOURD4Y_HEADERS = mapOf(
+    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+    "Cache-Control" to "no-cache",
+    "Pragma" to "no-cache",
+)
+
 class DiscourseService(
     private val store: FeedflowStore? = null,
     private val httpClient: FeedflowHttpClient = UnimplementedFeedflowHttpClient(),
@@ -365,43 +381,19 @@ class DiscourseService(
     override fun canCreateThread(community: Community): Boolean = true
 
     override suspend fun fetchCategories(): List<Community> =
-        DiscourseParser.parseCategories(httpClient.get("https://linux.do/categories.json"))
+        DiscourseParser.parseCategories(httpClient.get("https://linux.do/categories.json", store?.getCookies(id).orEmpty()))
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
         val path = if (categoryId == "latest") "latest.json" else "c/$categoryId.json"
-        val json = httpClient.get("https://linux.do/$path?page=$page")
+        val json = httpClient.get("https://linux.do/$path?page=$page", store?.getCookies(id).orEmpty())
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "linux_do", 0, 0)
-        return parseDiscourseTopicList(json, community)
+        return DiscourseParser.parseTopicList(json, community)
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
-        val json = httpClient.get("https://linux.do/t/$threadId.json")
-        val title = Regex(""""title"\s*:\s*"([^"]+)"""").find(json)?.groupValues?.get(1)?.decodeHtmlEntities() ?: "Linux.do"
-        val communityName = Regex(""""category_id"\s*:\s*(\d+)""").find(json)?.groupValues?.get(1).orEmpty()
-        val community = Community(communityName.ifBlank { "latest" }, communityName.ifBlank { "Latest" }, "", "linux_do", 0, 0)
-        val posts = Regex("""\{[^{}]*"id"\s*:\s*(\d+)[^{}]*"username"\s*:\s*"([^"]+)"[^{}]*"cooked"\s*:\s*"((?:[^"\\]|\\.)*)"""")
-            .findAll(json)
-            .map {
-                Comment(
-                    id = it.groupValues[1],
-                    author = User(it.groupValues[2], it.groupValues[2], "person.circle"),
-                    content = it.groupValues[3].jsonUnescape().stripTags().decodeHtmlEntities(),
-                    timeAgo = "",
-                    likeCount = 0,
-                )
-            }.toList()
-        val firstPost = posts.firstOrNull()
-        val thread = FeedThread(
-            id = threadId,
-            title = title,
-            content = firstPost?.content.orEmpty(),
-            author = firstPost?.author ?: User("linux_do", "Linux.do", "terminal.fill"),
-            community = community,
-            timeAgo = "",
-            likeCount = 0,
-            commentCount = (posts.size - 1).coerceAtLeast(0),
-        )
-        return ThreadDetailResult(thread, posts.drop(1), totalPages = null)
+        val json = httpClient.get("https://linux.do/t/$threadId.json?page=$page", store?.getCookies(id).orEmpty())
+        val (thread, comments, totalPages) = DiscourseParser.parseThreadDetail(json, threadId)
+        return ThreadDetailResult(thread, comments, totalPages)
     }
 
     override suspend fun createThread(categoryId: String, title: String, content: String) {
@@ -425,26 +417,6 @@ class DiscourseService(
     }
 
     override fun getWebUrl(thread: FeedThread): String = "https://linux.do/t/${thread.id}"
-
-    private fun parseDiscourseTopicList(json: String, community: Community): List<FeedThread> =
-        Regex("""\{[^{}]*"id"\s*:\s*(\d+)[^{}]*"title"\s*:\s*"([^"]+)"[^{}]*}""")
-            .findAll(json)
-            .map {
-                val block = it.value
-                val id = Regex(""""id"\s*:\s*(\d+)""").find(block)?.groupValues?.get(1).orEmpty()
-                val title = Regex(""""title"\s*:\s*"([^"]+)"""").find(block)?.groupValues?.get(1).orEmpty()
-                val posts = Regex(""""posts_count"\s*:\s*(\d+)""").find(block)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                FeedThread(
-                    id = id,
-                    title = title,
-                    content = "",
-                    author = User("linux_do", "Linux.do", "person.circle"),
-                    community = community,
-                    timeAgo = "",
-                    likeCount = 0,
-                    commentCount = (posts - 1).coerceAtLeast(0),
-                )
-            }.toList()
 }
 
 class FourD4YService(
@@ -463,43 +435,60 @@ class FourD4YService(
         if (!cookies.any { it.domain.contains("4d4y.com") && SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies) }) {
             return false
         }
-        val html = runCatching { httpClient.get("https://www.4d4y.com/forum/index.php", cookies) }.getOrNull() ?: return true
-        parseLoggedInUsername(html)?.let { username -> store?.saveSetting("detected_4d4y_username", username) }
-        return parseLoggedInUsername(html) != null
+        val html = runCatching { fetch("https://www.4d4y.com/forum/index.php", cookies) }.getOrNull() ?: return true
+        val username = parseLoggedInUsername(html)
+        username?.let { store?.saveSetting("detected_4d4y_username", it) }
+        return username != null || validateSessionHtml(html)
     }
 
     override fun canCreateThread(community: Community): Boolean = true
     override fun getWebUrl(thread: FeedThread): String = "https://www.4d4y.com/forum/viewthread.php?tid=${thread.id}"
 
     override suspend fun fetchCategories(): List<Community> {
-        val html = httpClient.get("https://www.4d4y.com/forum/index.php")
+        val html = fetch("https://www.4d4y.com/forum/index.php", authCookies())
         return FourD4YParser.parseCategories(html)
     }
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
-        val html = httpClient.get("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId&page=$page")
+        val html = fetch("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId&page=$page", authCookies())
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "4D4Y", 0, 0)
         return FourD4YParser.parseThreadRows(html, community)
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
-        val html = httpClient.get("https://www.4d4y.com/forum/viewthread.php?tid=$threadId&page=$page")
+        val html = fetch("https://www.4d4y.com/forum/viewthread.php?tid=$threadId&page=$page", authCookies())
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
         return ThreadDetailResult(parsed.first, parsed.second, parsed.third)
     }
 
+    private fun authCookies(): List<com.webrules.feedflow.core.network.FeedflowCookie> =
+        store?.getCookies(id).orEmpty().filter { it.domain.contains("4d4y.com") }
+
+    private suspend fun fetch(url: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): String =
+        httpClient.get(url, cookies, FOURD4Y_HEADERS, "GB18030")
+
+    private fun validateSessionHtml(html: String): Boolean {
+        val forumMatches = Regex("""href="forumdisplay\.php\?fid=(\d+)[^"]*"[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
+            .findAll(html).toList()
+        val lower = html.lowercase()
+        val hasLogout = lower.contains("action=logout") || lower.contains("action%3dlogout") || html.contains("退出")
+        val hasLogin = (lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
+        val hasDiscovery = forumMatches.any { it.groupValues[2].stripTags().trim() == "Discovery" }
+        return forumMatches.isNotEmpty() && !hasLogin && (hasLogout || hasDiscovery)
+    }
+
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val formHtml = httpClient.get("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies)
+        val formHtml = fetch("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies)
         val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "replyFormhash", formHtml.take(200))
         httpClient.post(
             url = "https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId&extra=&replysubmit=yes&inajax=1",
             body = listOf(
-                "formhash=${formHash.formEncode()}",
+                "formhash=${formHash.gbkFormEncode()}",
                 "subject=",
-                "message=${content.formEncode()}",
+                "message=${content.gbkFormEncode()}",
                 "replysubmit=yes",
             ).joinToString("&"),
             cookies = cookies,
@@ -509,12 +498,12 @@ class FourD4YService(
     override suspend fun createThread(categoryId: String, title: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val formHtml = httpClient.get("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies)
+        val formHtml = fetch("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies)
         val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "newThreadFormhash", formHtml.take(200))
-        val typeField = extractFirstTypeId(formHtml)?.let { "&typeid=${it.formEncode()}" }.orEmpty()
+        val typeField = extractFirstTypeId(formHtml)?.let { "&typeid=${it.gbkFormEncode()}" }.orEmpty()
         httpClient.post(
             url = "https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId&extra=&topicsubmit=yes&inajax=1",
-            body = "formhash=${formHash.formEncode()}$typeField&subject=${title.formEncode()}&message=${content.formEncode()}&topicsubmit=yes",
+            body = "formhash=${formHash.gbkFormEncode()}$typeField&subject=${title.gbkFormEncode()}&message=${content.gbkFormEncode()}&topicsubmit=yes",
             cookies = cookies,
         )
     }
@@ -522,13 +511,13 @@ class FourD4YService(
     override suspend fun deleteThread(threadId: String, categoryId: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val threadHtml = httpClient.get("https://www.4d4y.com/forum/viewthread.php?tid=$threadId", cookies)
+        val threadHtml = fetch("https://www.4d4y.com/forum/viewthread.php?tid=$threadId", cookies)
         val pid = parseFirstPostId(threadHtml) ?: throw FeedflowError.Parsing(id, "deletePid", threadHtml.take(200))
-        val editHtml = httpClient.get("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1", cookies)
+        val editHtml = fetch("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1", cookies)
         val formHash = extractFormHash(editHtml) ?: throw FeedflowError.Parsing(id, "deleteFormhash", editHtml.take(200))
         httpClient.post(
             url = "https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1&editsubmit=yes&inajax=1",
-            body = "formhash=${formHash.formEncode()}&delete=1&editsubmit=yes&inajax=1",
+            body = "formhash=${formHash.gbkFormEncode()}&delete=1&editsubmit=yes&inajax=1",
             cookies = cookies,
         )
     }
@@ -631,97 +620,363 @@ class FourD4YService(
 
 class ZhihuService(
     private val httpClient: FeedflowHttpClient = UnimplementedFeedflowHttpClient(),
+    private val store: FeedflowStore? = null,
 ) : StaticForumService() {
     override val name = "知乎"
     override val id = "zhihu"
     override val logo = "questionmark.bubble.fill"
     override val requiresLogin = true
+
+    private val recommendCommunity = Community("recommend", "知乎", "", "zhihu", 0, 0)
+    private val hotCommunity = Community("hot", "知乎热榜", "", "zhihu", 0, 0)
+    private val questionDataCache = mutableMapOf<String, Pair<String, String>>()
+
+    private fun cookies() = store?.getCookies(id).orEmpty()
+
+    private fun apiHeaders() = mapOf(
+        "Referer" to "https://www.zhihu.com/",
+        "x-requested-with" to "fetch",
+        "Accept" to "application/json, text/plain, */*",
+    )
+
     override suspend fun fetchCategories(): List<Community> = ZhihuParser.categories
-    override fun getWebUrl(thread: FeedThread): String =
-        if (thread.id.startsWith("question/") || thread.id.startsWith("p/")) {
-            "https://www.zhihu.com/${thread.id}"
-        } else {
-            "https://www.zhihu.com/question/${thread.id}"
+
+    fun normalizedAvatarUrl(url: String?, template: String? = null): String =
+        ZhihuParser.normalizedAvatarUrl(url, template)
+
+    override val currentUsername: String?
+        get() = null
+
+    override suspend fun restoreSession(): Boolean {
+        val cookies = cookies()
+        if (cookies.isEmpty()) return true
+        val me = runCatching {
+            httpClient.get("https://www.zhihu.com/api/v4/me", cookies, apiHeaders())
+        }.getOrNull() ?: return true
+        return ZhihuJson.parse(me)?.obj()?.str("name") != null
+    }
+
+    override fun getWebUrl(thread: FeedThread): String {
+        val parts = thread.id.split("_", limit = 2)
+        if (parts.size != 2) return "https://www.zhihu.com"
+        val (type, rawId) = parts
+        val identifier = rawId
+        return when (type) {
+            "answer" -> "https://www.zhihu.com/question/0/answer/$identifier"
+            "article" -> "https://zhuanlan.zhihu.com/p/$identifier"
+            "question" -> "https://www.zhihu.com/question/$identifier"
+            else -> "https://www.zhihu.com"
+        }
+    }
+
+    override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> =
+        when (categoryId) {
+            "hot" -> fetchHotList(page)
+            else -> fetchRecommendFeed(page)
         }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
-        val url = if (threadId.startsWith("http")) {
-            threadId
-        } else if (threadId.startsWith("question/") || threadId.startsWith("p/")) {
-            "https://www.zhihu.com/$threadId"
-        } else {
-            "https://www.zhihu.com/question/$threadId"
+        val parts = threadId.split("_", limit = 2)
+        val type = parts.getOrNull(0).orEmpty()
+        val id = parts.getOrNull(1).orEmpty()
+        return when (type) {
+            "answer" -> fetchAnswerDetail(id, page)
+            "article" -> fetchArticleDetail(id, page)
+            "question" -> fetchQuestionDetail(id, page)
+            else -> fetchGenericDetail(threadId)
         }
-        val html = httpClient.get(url)
+    }
+
+    private suspend fun fetchRecommendFeed(page: Int): List<FeedThread> {
+        val url = if (page <= 1) {
+            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10"
+        } else {
+            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=$page"
+        }
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
+        val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
+        val seen = linkedSetOf<String>()
+        val threads = mutableListOf<FeedThread>()
+        for (element in data) {
+            val item = element.obj() ?: continue
+            if (item.str("type") == "feed_advert") continue
+            val target = item.obj("target") ?: continue
+            val targetType = target.str("type") ?: continue
+            if (targetType !in listOf("answer", "article", "question", "pin")) continue
+            if (ZhihuParser.filterReason(target) != null) continue
+            val targetId = target.longId("id") ?: continue
+            val threadId = "${targetType}_$targetId"
+            if (!seen.add(threadId)) continue
+            threads += FeedThread(
+                id = threadId,
+                title = ZhihuParser.effectiveTitle(target),
+                content = target.str("excerpt").orEmpty().decodeHtmlEntities(),
+                author = ZhihuParser.author(target.obj("author")),
+                community = recommendCommunity,
+                timeAgo = ZhihuParser.formatTimestamp(target.int("created_time")),
+                likeCount = target.int("voteup_count") ?: 0,
+                commentCount = target.int("comment_count") ?: 0,
+                tags = listOf(ZhihuParser.typeDescription(targetType)),
+            )
+        }
+        return threads
+    }
+
+    private suspend fun fetchHotList(page: Int): List<FeedThread> {
+        if (page > 1) return emptyList()
+        val url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
+        val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
+        val threads = mutableListOf<FeedThread>()
+        for (element in data) {
+            val item = element.obj() ?: continue
+            val target = item.obj("target") ?: continue
+            val cardId = item.str("card_id")
+            val questionId = if (cardId != null && cardId.startsWith("Q_")) {
+                cardId.removePrefix("Q_")
+            } else {
+                item.longId("id")?.toString() ?: continue
+            }
+            val title = target.obj("title_area").str("text") ?: "Untitled"
+            val childAuthor = item.arr("children")?.firstOrNull()?.obj()?.obj("author")
+            val excerpt = target.obj("excerpt_area").str("text")
+                ?: item.arr("children")?.firstOrNull()?.obj()?.str("excerpt")
+                ?: ""
+            questionDataCache[questionId] = title to excerpt
+            val metrics = target.obj("metrics_area")
+            threads += FeedThread(
+                id = "question_$questionId",
+                title = title.decodeHtmlEntities(),
+                content = excerpt.decodeHtmlEntities(),
+                author = ZhihuParser.author(childAuthor, fallbackName = "热榜"),
+                community = hotCommunity,
+                timeAgo = item.str("detail_text").orEmpty(),
+                likeCount = metrics.int("follower_count") ?: 0,
+                commentCount = metrics.int("answer_count") ?: 0,
+                tags = listOf("🔥 热榜"),
+            )
+        }
+        return threads
+    }
+
+    private suspend fun fetchAnswerDetail(answerId: String, page: Int): ThreadDetailResult {
+        val url = "https://www.zhihu.com/api/v4/answers/$answerId" +
+            "?include=content,html_content,excerpt,thanks_count,voteup_count,comment_count,visited_count,author"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
+            ?: return fetchGenericDetail("answer_$answerId")
+        val answer = ZhihuJson.parse(body)?.obj() ?: return fetchGenericDetail("answer_$answerId")
+        val content = answer.str("content") ?: answer.str("html_content") ?: answer.str("excerpt") ?: ""
+        val thread = FeedThread(
+            id = "answer_$answerId",
+            title = answer.obj("question").str("title") ?: "回答",
+            content = ZhihuParser.cleanHtml(content),
+            author = ZhihuParser.author(answer.obj("author")),
+            community = recommendCommunity,
+            timeAgo = ZhihuParser.formatTimestamp(answer.int("created_time") ?: answer.int("updated_time")),
+            likeCount = answer.int("voteup_count") ?: 0,
+            commentCount = answer.int("comment_count") ?: 0,
+        )
+        return ThreadDetailResult(thread, fetchComments("answers", answerId, page), null)
+    }
+
+    private suspend fun fetchArticleDetail(articleId: String, page: Int): ThreadDetailResult {
+        val url = "https://www.zhihu.com/api/v4/articles/$articleId" +
+            "?include=content,html_content,excerpt,thanks_count,voteup_count,comment_count,visited_count,author"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
+            ?: return fetchGenericDetail("article_$articleId")
+        val article = ZhihuJson.parse(body)?.obj() ?: return fetchGenericDetail("article_$articleId")
+        val content = article.str("content") ?: article.str("html_content") ?: article.str("excerpt") ?: ""
+        val thread = FeedThread(
+            id = "article_$articleId",
+            title = article.str("title") ?: "文章",
+            content = ZhihuParser.cleanHtml(content),
+            author = ZhihuParser.author(article.obj("author")),
+            community = recommendCommunity,
+            timeAgo = ZhihuParser.formatTimestamp(article.int("created") ?: article.int("updated")),
+            likeCount = article.int("voteup_count") ?: 0,
+            commentCount = article.int("comment_count") ?: 0,
+        )
+        return ThreadDetailResult(thread, fetchComments("articles", articleId, page), null)
+    }
+
+    private suspend fun fetchQuestionDetail(questionId: String, page: Int): ThreadDetailResult {
+        val url = "https://www.zhihu.com/api/v4/questions/$questionId" +
+            "?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
+        val json = body?.let { ZhihuJson.parse(it)?.obj() }
+        var title = "问题"
+        var detail = ""
+        var commentCount = 0
+        var answerCount = 0
+        var author = ZhihuParser.author(null)
+        if (json != null && json.str("error") == null) {
+            title = json.str("title") ?: title
+            detail = json.str("detail") ?: json.str("excerpt") ?: ""
+            commentCount = json.int("comment_count") ?: 0
+            answerCount = json.int("answer_count") ?: 0
+            author = ZhihuParser.author(json.obj("author"))
+        } else {
+            questionDataCache[questionId]?.let { (cachedTitle, cachedExcerpt) ->
+                title = cachedTitle
+                detail = cachedExcerpt
+            }
+        }
+        val thread = FeedThread(
+            id = "question_$questionId",
+            title = title.decodeHtmlEntities(),
+            content = ZhihuParser.cleanHtml(detail),
+            author = author,
+            community = hotCommunity,
+            timeAgo = "",
+            likeCount = 0,
+            commentCount = commentCount,
+            tags = if (answerCount > 0) listOf("回答数: $answerCount") else null,
+        )
+        return ThreadDetailResult(thread, fetchQuestionAnswers(questionId, page), null)
+    }
+
+    private suspend fun fetchGenericDetail(threadId: String): ThreadDetailResult {
+        val webUrl = getWebUrl(FeedThread(threadId, "", "", ZhihuParser.author(null), recommendCommunity, "", 0, 0))
+        val html = runCatching { httpClient.get(webUrl, cookies()) }.getOrNull().orEmpty()
         val title = Regex("""<title[^>]*>(.*?)</title>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .find(html)?.groupValues?.get(1)?.substringBefore(" - 知乎")?.stripTags()?.decodeHtmlEntities()
-            ?: Regex(""""title"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(html)?.groupValues?.get(1)?.jsonUnescape()?.decodeHtmlEntities()
             ?: "知乎"
-        val content = listOf(
-            Regex("""<meta\s+name=["']description["']\s+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1),
-            Regex(""""excerpt"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(html)?.groupValues?.get(1)?.jsonUnescape(),
-            Regex("""<script[^>]+id=["']js-initialData["'][^>]*>(.*?)</script>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                .find(html)?.groupValues?.get(1)?.take(900)?.jsonUnescape(),
-        ).firstOrNull { !it.isNullOrBlank() }?.stripTags()?.decodeHtmlEntities().orEmpty()
+        val content = Regex("""<meta\s+name=["']description["']\s+content=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)?.decodeHtmlEntities().orEmpty()
         val thread = FeedThread(
             id = threadId,
             title = title,
             content = content,
-            author = User("zhihu", "知乎", "questionmark.bubble.fill"),
-            community = ZhihuParser.categories.first(),
+            author = ZhihuParser.author(null),
+            community = recommendCommunity,
             timeAgo = "",
             likeCount = 0,
             commentCount = 0,
         )
-        return ThreadDetailResult(thread, emptyList(), totalPages = null)
+        return ThreadDetailResult(thread, emptyList(), null)
     }
 
-    override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
-        if (page > 1) return emptyList()
-        val html = httpClient.get(if (categoryId == "hot") "https://www.zhihu.com/hot" else "https://www.zhihu.com")
-        val community = communities.firstOrNull { it.id == categoryId } ?: ZhihuParser.categories.first()
-        return ZhihuParser.extractSearchUrls(html).take(20).mapIndexed { index, url ->
-            urlToThread(url, community, index)
+    private suspend fun fetchComments(type: String, id: String, page: Int): List<Comment> {
+        val offset = (page - 1) * 20
+        val url = "https://www.zhihu.com/api/v4/$type/$id/root_comments?limit=20&offset=$offset&order=normal&status=open"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
+        val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
+        return data.mapNotNull { element ->
+            val comment = element.obj() ?: return@mapNotNull null
+            val content = comment.str("content")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            Comment(
+                id = comment.str("id") ?: comment.longId("id")?.toString() ?: return@mapNotNull null,
+                author = ZhihuParser.author(comment.obj("author").obj("member") ?: comment.obj("author"), fallbackName = "匿名"),
+                content = ZhihuParser.cleanHtml(content),
+                timeAgo = ZhihuParser.formatTimestamp(comment.int("created_time")),
+                likeCount = comment.int("like_count") ?: 0,
+                replies = comment.arr("child_comments")?.mapNotNull { childElement ->
+                    val child = childElement.obj() ?: return@mapNotNull null
+                    val childContent = child.str("content") ?: return@mapNotNull null
+                    Comment(
+                        id = child.str("id") ?: child.longId("id")?.toString() ?: return@mapNotNull null,
+                        author = ZhihuParser.author(child.obj("author").obj("member") ?: child.obj("author"), fallbackName = "匿名"),
+                        content = ZhihuParser.cleanHtml(childContent),
+                        timeAgo = ZhihuParser.formatTimestamp(child.int("created_time")),
+                        likeCount = child.int("like_count") ?: 0,
+                    )
+                }?.takeIf { it.isNotEmpty() },
+            )
+        }
+    }
+
+    private suspend fun fetchQuestionAnswers(questionId: String, page: Int): List<Comment> {
+        val offset = (page - 1) * 10
+        val url = "https://www.zhihu.com/api/v4/questions/$questionId/answers" +
+            "?include=content,voteup_count,comment_count&limit=10&offset=$offset&sort_by=default"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
+        val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
+        return data.mapNotNull { element ->
+            val answer = element.obj() ?: return@mapNotNull null
+            val content = answer.str("content") ?: answer.str("excerpt") ?: ""
+            val votes = answer.int("voteup_count") ?: 0
+            Comment(
+                id = answer.longId("id")?.toString() ?: answer.str("id") ?: return@mapNotNull null,
+                author = ZhihuParser.author(answer.obj("author"), fallbackName = "匿名用户"),
+                content = ZhihuParser.cleanHtml(content),
+                timeAgo = "👍 $votes",
+                likeCount = votes,
+            )
         }
     }
 
     override suspend fun searchThreads(query: String, page: Int): SearchResult {
-        if (page > 1) return SearchResult(emptyList(), false)
+        val limit = 20
+        val offset = (page - 1) * limit
         val encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
-        val html = httpClient.get("https://www.zhihu.com/search?type=content&q=$encoded")
-        val community = Community("search", "Search", query, "Zhihu", 0, 0)
-        return SearchResult(
-            threads = ZhihuParser.extractSearchUrls(html).take(20).mapIndexed { index, url -> urlToThread(url, community, index) },
-            hasMore = false,
-        )
-    }
-
-    private fun urlToThread(url: String, community: Community, index: Int): FeedThread {
-        val id = url.removePrefix("https://www.zhihu.com/")
-        val title = when {
-            "/answer/" in url -> "Zhihu Answer ${index + 1}"
-            "/p/" in url -> "Zhihu Article ${index + 1}"
-            else -> "Zhihu Question ${index + 1}"
+        val url = "https://www.zhihu.com/api/v4/search_v3?q=$encoded&t=content&correction=1&offset=$offset&limit=$limit"
+        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
+            ?: return SearchResult(emptyList(), false)
+        val root = ZhihuJson.parse(body)?.obj() ?: return SearchResult(emptyList(), false)
+        val data = root.arr("data") ?: return SearchResult(emptyList(), false)
+        val searchCommunity = Community("search", "搜索", query, "zhihu", 0, 0)
+        val threads = data.mapNotNull { element ->
+            val item = element.obj() ?: return@mapNotNull null
+            val obj = item.obj("object") ?: return@mapNotNull null
+            val type = obj.str("type") ?: return@mapNotNull null
+            if (type !in listOf("answer", "article", "question")) return@mapNotNull null
+            val objId = obj.longId("id") ?: 0L
+            val title = if (type == "answer") {
+                obj.obj("question").str("title")?.takeIf { it.isNotEmpty() } ?: obj.str("title") ?: "无标题"
+            } else {
+                obj.str("title") ?: "无标题"
+            }
+            FeedThread(
+                id = "${type}_$objId",
+                title = ZhihuParser.cleanSearchText(title),
+                content = ZhihuParser.cleanSearchText(obj.str("excerpt").orEmpty()),
+                author = ZhihuParser.author(obj.obj("author")),
+                community = searchCommunity,
+                timeAgo = ZhihuParser.formatTimestamp(obj.int("created_time")),
+                likeCount = obj.int("voteup_count") ?: 0,
+                commentCount = obj.int("comment_count") ?: 0,
+                tags = listOf(ZhihuParser.typeDescription(type)),
+            )
         }
-        return FeedThread(
-            id = id,
-            title = title,
-            content = url,
-            author = User("zhihu", "知乎", "questionmark.bubble.fill"),
-            community = community,
-            timeAgo = "",
-            likeCount = 0,
-            commentCount = 0,
-        )
+        val paging = root.obj("paging")
+        val hasMore = paging.bool("is_end") == false || paging.str("next")?.isNotEmpty() == true
+        return SearchResult(threads, hasMore)
     }
+}
 
-    fun normalizedAvatarUrl(url: String?, template: String? = null): String {
-        val candidate = url?.takeIf { it.isNotBlank() } ?: template.orEmpty()
-        if (candidate.isBlank()) return ""
-        return candidate
-            .replace("{size}", "80")
-            .replace("_80.", "_80.")
-            .replace("&amp;", "&")
-            .let { if (it.startsWith("//")) "https:$it" else it }
+internal object ZhihuJson {
+    private val lenient = Json { ignoreUnknownKeys = true; isLenient = true; coerceInputValues = true }
+
+    fun parse(text: String): JsonElement? = runCatching { lenient.parseToJsonElement(text) }.getOrNull()
+}
+
+internal fun JsonElement?.obj(): JsonObject? = this as? JsonObject
+
+internal fun JsonObject?.obj(key: String): JsonObject? = this?.get(key) as? JsonObject
+
+internal fun JsonObject?.arr(key: String): JsonArray? = this?.get(key) as? JsonArray
+
+internal fun JsonObject?.str(key: String): String? {
+    val prim = this?.get(key) as? JsonPrimitive ?: return null
+    if (prim.isString) return prim.content
+    return prim.contentOrNull
+}
+
+internal fun JsonObject?.int(key: String): Int? {
+    val prim = this?.get(key) as? JsonPrimitive ?: return null
+    return prim.intOrNull ?: prim.contentOrNull?.toDoubleOrNull()?.toInt()
+}
+
+internal fun JsonObject?.longId(key: String): Long? {
+    val prim = this?.get(key) as? JsonPrimitive ?: return null
+    return prim.contentOrNull?.toLongOrNull()
+}
+
+internal fun JsonObject?.bool(key: String): Boolean? {
+    val prim = this?.get(key) as? JsonPrimitive ?: return null
+    return prim.booleanOrNull ?: when (prim.contentOrNull) {
+        "true" -> true
+        "false" -> false
+        else -> null
     }
 }

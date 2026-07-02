@@ -91,6 +91,14 @@ class FeedflowAppStateController(
         ).also { detailCache[detailKey(site, thread)] = it }
     }
 
+    suspend fun moreComments(site: ForumSite, thread: FeedThread, page: Int): List<Comment> =
+        repository.loadMoreComments(site, thread, page)
+
+    fun supportsCommentPagination(site: ForumSite): Boolean = repository.supportsCommentPagination(site)
+
+    suspend fun prefetchThreadDetails(site: ForumSite, threads: List<FeedThread>, enabled: Boolean, isWifi: Boolean) =
+        repository.prefetchThreadDetails(site, threads, enabled, isWifi)
+
     suspend fun search(site: ForumSite, query: String, page: Int = 1): LoadableContent<SearchResult> {
         val result = repository.searchThreads(site, query, page)
         return contentFromResult(

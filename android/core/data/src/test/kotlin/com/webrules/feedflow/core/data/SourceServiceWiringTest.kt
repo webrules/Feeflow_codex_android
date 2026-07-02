@@ -55,7 +55,7 @@ class SourceServiceWiringTest {
         val httpClient = SourceFixtureHttpClient(
             "https://linux.do/categories.json" to """{"category_list":{"categories":[{"id":5,"name":"General","description":"Talk","slug":"general","topic_count":42}]}}""",
             "https://linux.do/c/5.json?page=1" to """{"topic_list":{"topics":[{"id":9,"title":"Linux topic","posts_count":3}]}}""",
-            "https://linux.do/t/9.json" to """
+            "https://linux.do/t/9.json?page=1" to """
                 {"title":"Linux topic","category_id":5,"post_stream":{"posts":[
                   {"id":91,"username":"alice","cooked":"<p>Original &amp; post</p>"},
                   {"id":92,"username":"bob","cooked":"<p>Reply<br>body</p>"}
@@ -162,28 +162,37 @@ class SourceServiceWiringTest {
     @Test fun zhihuServiceExposesRecommendationAndHotCategories() = runBlocking {
         val categories = ZhihuService().fetchCategories()
         assertEquals(listOf("recommend", "hot"), categories.map { it.id })
-        assertEquals("https://www.zhihu.com/question/answer_1", ZhihuService().getWebUrl(sampleThread("answer_1")))
+        assertEquals("https://www.zhihu.com/question/0/answer/1", ZhihuService().getWebUrl(sampleThread("answer_1")))
     }
 
-    @Test fun zhihuServiceUsesSearchUrlsForHotAndSearchResults() = runBlocking {
+    @Test fun zhihuServiceParsesHotSearchAndDetailJson() = runBlocking {
         val service = ZhihuService(
             SourceFixtureHttpClient(
-                "https://www.zhihu.com/hot" to """<a href="https://www.zhihu.com/question/123/answer/456">Answer</a>""",
-                "https://www.zhihu.com/question/123/answer/456" to """<html><head><title>Android parity - 知乎</title><meta name="description" content="Zhihu answer body"></head></html>""",
-                "https://www.zhihu.com/search?type=content&q=android+parity" to """<a href="https://www.zhihu.com/p/789">Article</a>""",
+                "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
+                    """{"data":[{"card_id":"Q_123","detail_text":"100万热度","target":{"title_area":{"text":"Hot question"},"excerpt_area":{"text":"Hot excerpt"},"metrics_area":{"follower_count":10,"answer_count":5}},"children":[{"author":{"name":"作者"}}]}]}""",
+                "https://www.zhihu.com/api/v4/search_v3?q=android+parity&t=content&correction=1&offset=0&limit=20" to
+                    """{"data":[{"object":{"type":"article","id":789,"title":"Search article","excerpt":"body","author":{"name":"A"}}}],"paging":{"is_end":true}}""",
+                "https://www.zhihu.com/api/v4/answers/456?include=content,html_content,excerpt,thanks_count,voteup_count,comment_count,visited_count,author" to
+                    """{"content":"Answer body","voteup_count":3,"comment_count":1,"question":{"title":"Android parity"},"author":{"name":"Writer"}}""",
+                "https://www.zhihu.com/api/v4/answers/456/root_comments?limit=20&offset=0&order=normal&status=open" to
+                    """{"data":[{"id":"c1","content":"Nice","created_time":0,"like_count":2,"author":{"member":{"name":"Reader"}}}]}""",
             ),
         )
         val categories = service.fetchCategories()
         val hot = service.fetchCategoryThreads("hot", categories, 1)
-        assertEquals("question/123/answer/456", hot.single().id)
-        assertEquals("https://www.zhihu.com/question/123/answer/456", service.getWebUrl(hot.single()))
+        assertEquals("question_123", hot.single().id)
+        assertEquals("Hot question", hot.single().title)
 
         val search = service.searchThreads("android parity", 1)
-        assertEquals("p/789", search.threads.single().id)
-        assertEquals("https://www.zhihu.com/p/789", service.getWebUrl(search.threads.single()))
-        val detail = service.fetchThreadDetail("question/123/answer/456", 1)
+        assertEquals("article_789", search.threads.single().id)
+        assertEquals("Search article", search.threads.single().title)
+        assertEquals("https://zhuanlan.zhihu.com/p/789", service.getWebUrl(search.threads.single()))
+
+        val detail = service.fetchThreadDetail("answer_456", 1)
         assertEquals("Android parity", detail.thread.title)
-        assertEquals("Zhihu answer body", detail.thread.content)
+        assertEquals("Answer body", detail.thread.content)
+        assertEquals("Nice", detail.comments.single().content)
+        assertEquals("Reader", detail.comments.single().author.username)
     }
 
     private fun sampleThread(id: String) = com.webrules.feedflow.core.model.FeedThread(

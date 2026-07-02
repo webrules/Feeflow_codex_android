@@ -13,12 +13,11 @@ import com.webrules.feedflow.core.model.Comment
 import com.webrules.feedflow.core.model.Community
 import com.webrules.feedflow.core.model.FeedThread
 import com.webrules.feedflow.core.network.FeedflowCookie
-import com.webrules.feedflow.core.security.AesGcmSecretStore
 import com.webrules.feedflow.core.security.SecretStore
 
 class AndroidSqliteFeedflowStore(
     context: Context,
-    private val secretStore: SecretStore = AesGcmSecretStore(),
+    private val secretStore: SecretStore = KeystoreSecretStore(context),
     private val clockMillis: () -> Long = { System.currentTimeMillis() },
 ) : FeedflowStore {
     private val helper = FeedflowSqliteOpenHelper(context.applicationContext)

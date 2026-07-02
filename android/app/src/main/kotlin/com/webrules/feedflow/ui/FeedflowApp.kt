@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -82,6 +83,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.Tune
@@ -110,6 +114,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -181,7 +186,7 @@ private sealed interface FeedflowRoute {
     data object SiteList : FeedflowRoute
     data class Communities(val site: ForumSite) : FeedflowRoute
     data class Threads(val site: ForumSite, val community: Community) : FeedflowRoute
-    data class Detail(val site: ForumSite, val thread: FeedThread) : FeedflowRoute
+    data class Detail(val site: ForumSite, val thread: FeedThread, val contextThreads: List<FeedThread> = emptyList()) : FeedflowRoute
     data object Login : FeedflowRoute
     data object Settings : FeedflowRoute
     data object Bookmarks : FeedflowRoute
@@ -221,8 +226,11 @@ private object FeedflowIconMap {
         "square.and.pencil" -> Icons.Default.Edit
         "dot.radiowaves.left.and.right" -> Icons.Default.RssFeed
         "list.bullet.rectangle.portrait.fill" -> Icons.Default.FormatListBulleted
-        "chevron.right" -> Icons.Default.ArrowBack
+        "chevron.right" -> Icons.Default.KeyboardArrowRight
         "house.fill" -> Icons.Default.Home
+        "stop.fill" -> Icons.Default.Stop
+        "speaker.wave.2.fill" -> Icons.Default.VolumeUp
+        "arrow.up.forward.app" -> Icons.Default.OpenInNew
         "tray.and.arrow.down.fill" -> Icons.Default.FileDownload
         "link.circle.fill" -> Icons.Default.Link
         "person.fill" -> Icons.Default.Person
@@ -293,6 +301,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     val appStateController = remember(repository, initialHomeState) { FeedflowAppStateController(repository, initialHomeState) }
     val authCoordinator = remember(store) { AuthSessionCoordinator(store) }
     val cookieBridge = remember { AndroidWebLoginCookieBridge() }
+    val networkMonitor = remember(context) { com.webrules.feedflow.net.NetworkMonitor(context) }
+    val networkStatus by produceState(initialValue = networkMonitor.current(), networkMonitor) {
+        networkMonitor.statusFlow().collect { value = it }
+    }
     var route by remember { mutableStateOf<FeedflowRoute>(FeedflowRoute.SiteList) }
     var homeState by remember { mutableStateOf(appStateController.homeState) }
     var bookmarkRevision by remember { mutableStateOf(0) }
@@ -353,19 +365,30 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshThreads(current.site, current.community)
             }
+            LaunchedEffect(current.site, current.community.id, content.value, networkStatus, homeState.backgroundPrefetch) {
+                if (content.value.isNotEmpty()) {
+                    appStateController.prefetchThreadDetails(
+                        site = current.site,
+                        threads = content.value.take(6),
+                        enabled = homeState.backgroundPrefetch,
+                        isWifi = networkStatus.isWifi,
+                    )
+                }
+            }
             val filteredPostIds = remember(filterRevision, current.site) {
                 store.getFilteredPostIds(current.site.serviceId)
             }
+            val visibleThreads = content.value.filterNot { thread -> filteredPostIds.contains(thread.id) }
             ThreadListScreen(
                 site = current.site,
                 community = current.community,
-                threads = content.value.filterNot { thread -> filteredPostIds.contains(thread.id) },
+                threads = visibleThreads,
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
                 onBack = { route = FeedflowRoute.Communities(current.site) },
                 onHome = { route = FeedflowRoute.SiteList },
-                onThreadClick = { route = FeedflowRoute.Detail(current.site, it) },
+                onThreadClick = { route = FeedflowRoute.Detail(current.site, it, visibleThreads) },
                 onNewThread = { route = FeedflowRoute.NewThread(current.site, current.community) },
                 onRefresh = {
                     refreshToken += 1
@@ -377,21 +400,46 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             )
         }
         is FeedflowRoute.Detail -> {
-            var content by remember(current.site, current.thread.id) {
-                mutableStateOf(appStateController.detail(current.site, current.thread))
+            var activeThread by remember(current.site, current.thread.id) { mutableStateOf(current.thread) }
+            var content by remember(current.site, activeThread.id) {
+                mutableStateOf(appStateController.detail(current.site, activeThread))
             }
-            var refreshToken by remember(current.site, current.thread.id) { mutableStateOf(0) }
-            LaunchedEffect(current.site, current.thread.id, refreshToken) {
+            var refreshToken by remember(current.site, activeThread.id) { mutableStateOf(0) }
+            var extraComments by remember(current.site, activeThread.id) { mutableStateOf(emptyList<Comment>()) }
+            var commentPage by remember(current.site, activeThread.id) { mutableStateOf(1) }
+            var canLoadMore by remember(current.site, activeThread.id) { mutableStateOf(false) }
+            LaunchedEffect(current.site, activeThread.id, refreshToken) {
                 content = content.copy(isLoading = true)
-                content = appStateController.refreshDetail(current.site, current.thread)
+                content = appStateController.refreshDetail(current.site, activeThread)
+                extraComments = emptyList()
+                commentPage = 1
+                canLoadMore = appStateController.supportsCommentPagination(current.site) && content.value.comments.isNotEmpty()
             }
+            val contextThreads = current.contextThreads
+            val activeIndex = contextThreads.indexOfFirst { it.id == activeThread.id }
             ThreadDetailScreen(
                 site = current.site,
                 thread = content.value.thread,
-                comments = content.value.comments,
+                comments = content.value.comments + extraComments,
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
+                webUrl = appStateController.webUrl(current.site, content.value.thread),
+                hasPrevious = activeIndex > 0,
+                hasNext = activeIndex >= 0 && activeIndex < contextThreads.size - 1,
+                onPrevious = { if (activeIndex > 0) activeThread = contextThreads[activeIndex - 1] },
+                onNext = { if (activeIndex >= 0 && activeIndex < contextThreads.size - 1) activeThread = contextThreads[activeIndex + 1] },
+                canLoadMore = canLoadMore,
+                onLoadMore = {
+                    val nextPage = commentPage + 1
+                    val more = appStateController.moreComments(current.site, content.value.thread, nextPage)
+                    if (more.isEmpty()) {
+                        canLoadMore = false
+                    } else {
+                        extraComments = extraComments + more
+                        commentPage = nextPage
+                    }
+                },
                 onBack = { route = FeedflowRoute.Threads(current.site, content.value.thread.community) },
                 onHome = { route = FeedflowRoute.SiteList },
                 onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments) },
@@ -722,6 +770,13 @@ private fun ThreadDetailScreen(
     isLoading: Boolean,
     warning: String?,
     loadedFromCache: Boolean,
+    webUrl: String,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    canLoadMore: Boolean,
+    onLoadMore: suspend () -> Unit,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onAiSummary: () -> Unit,
@@ -735,12 +790,48 @@ private fun ThreadDetailScreen(
     postController: FeedflowAppStateController,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val ttsController = remember(context) { AndroidTtsController(context) }
+    var speech by remember { mutableStateOf(SpeechPlaybackState()) }
+    val ttsLanguage = if (LocalContext.current.resources.configuration.locales[0].language == "zh") "zh" else "en"
+    DisposableEffect(ttsController) { onDispose { ttsController.shutdown() } }
+    var isLoadingMore by remember(thread.id) { mutableStateOf(false) }
     var replyState by remember { mutableStateOf(ReplyComposerState()) }
     var actionError by remember(thread.id) { mutableStateOf<String?>(null) }
     var showingDeleteConfirmation by remember(thread.id) { mutableStateOf(false) }
     var postedReplies by remember(thread.id) { mutableStateOf(emptyList<Comment>()) }
     val justNow = stringResource(R.string.just_now)
     val renderedComments = comments + postedReplies
+    LaunchedEffect(thread.id) { ttsController.stop(); speech = speech.stop() }
+    fun toggleSpeech() {
+        speech = if (speech.isSpeaking) {
+            ttsController.stop()
+            speech.stop()
+        } else {
+            val text = buildString {
+                appendLine(thread.title)
+                appendLine(thread.content)
+                renderedComments.take(20).forEach { appendLine("${it.author.username}: ${it.content}") }
+            }
+            if (ttsController.speak(text, ttsLanguage)) speech.speak(text, ttsLanguage) else speech.stop()
+        }
+    }
+    fun shareThread() {
+        val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(android.content.Intent.EXTRA_SUBJECT, thread.title)
+            putExtra(android.content.Intent.EXTRA_TEXT, "${thread.title}\n$webUrl")
+        }
+        context.startActivity(android.content.Intent.createChooser(sendIntent, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+    fun openExternal() {
+        runCatching {
+            context.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(webUrl))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
     val firstImageUrl = remember(thread.content, renderedComments) {
         firstImageUrl(thread.content + "\n" + renderedComments.joinToString("\n") { it.content })
     }
@@ -827,16 +918,38 @@ private fun ThreadDetailScreen(
                         )
                     }
                 }
+                if (hasPrevious || hasNext) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(onClick = onPrevious, enabled = hasPrevious && !isLoading, modifier = Modifier.weight(1f)) {
+                            Icon(FeedflowIconMap.symbol("chevron.left"), contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.previous_thread))
+                        }
+                        Button(onClick = onNext, enabled = hasNext && !isLoading, modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.next_thread))
+                            Spacer(Modifier.width(4.dp))
+                            Icon(FeedflowIconMap.symbol("chevron.right"), contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
                 ThreadDetailActionToolbar(
                     loadedFromCache = loadedFromCache,
                     canDelete = canDelete,
                     isBookmarked = isBookmarked,
+                    isSpeaking = speech.isSpeaking,
                     onBack = onBack,
                     onHome = onHome,
                     onRefresh = onRefresh,
                     onToggleBookmark = onToggleBookmark,
                     onAiSummary = onAiSummary,
                     onOpenBrowser = onOpenBrowser,
+                    onSpeak = ::toggleSpeech,
+                    onShare = ::shareThread,
+                    onOpenExternal = ::openExternal,
                     onDelete = { showingDeleteConfirmation = true },
                 )
             }
@@ -888,7 +1001,7 @@ private fun ThreadDetailScreen(
                         }
                         Text(thread.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(10.dp))
-                        ParsedContent(thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) })
+                        ParsedContent(thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) }, onImageClick = onOpenImage)
                         firstImageUrl?.let { imageUrl ->
                             TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
                         }
@@ -911,6 +1024,23 @@ private fun ThreadDetailScreen(
                             },
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
+                    }
+                }
+                if (canLoadMore && renderedComments.isNotEmpty()) {
+                    item {
+                        Button(
+                            onClick = {
+                                if (!isLoadingMore) {
+                                    isLoadingMore = true
+                                    scope.launch {
+                                        onLoadMore()
+                                        isLoadingMore = false
+                                    }
+                                }
+                            },
+                            enabled = !isLoadingMore,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (isLoadingMore) stringResource(R.string.loading) else stringResource(R.string.load_more_comments)) }
                     }
                 }
             }
@@ -1763,28 +1893,11 @@ private fun FullScreenImageScreen(url: String, onClose: () -> Unit) {
                     )
                 },
         ) {
-            AndroidView(
+            coil.compose.AsyncImage(
+                model = url,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)),
-                factory = { context ->
-                    WebView(context).apply {
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
-                        settings.loadWithOverviewMode = true
-                        settings.useWideViewPort = true
-                        loadDataWithBaseURL(
-                            url,
-                            """
-                            <html><body style="margin:0;background:#000;display:flex;align-items:center;justify-content:center;height:100vh;">
-                            <img src="$url" style="max-width:100%;max-height:100%;object-fit:contain;" />
-                            </body></html>
-                            """.trimIndent(),
-                            "text/html",
-                            "UTF-8",
-                            null,
-                        )
-                    }
-                },
             )
             Text(
                 text = "Zoom: ${"%.1f".format(scale)}x · Rotation: $rotation°",
@@ -2281,18 +2394,25 @@ private fun ThreadDetailActionToolbar(
     loadedFromCache: Boolean,
     canDelete: Boolean,
     isBookmarked: Boolean,
+    isSpeaking: Boolean,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onRefresh: () -> Unit,
     onToggleBookmark: () -> Unit,
     onAiSummary: () -> Unit,
     onOpenBrowser: () -> Unit,
+    onSpeak: () -> Unit,
+    onShare: () -> Unit,
+    onOpenExternal: () -> Unit,
     onDelete: () -> Unit,
 ) {
     ToolbarCard {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
-            Spacer(Modifier.weight(1f))
             Box(
                 modifier = Modifier.size(30.dp).clip(CircleShape).background((if (loadedFromCache) Color(0xFFF57C00) else Color(0xFF2E7D32)).copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center,
@@ -2307,12 +2427,19 @@ private fun ThreadDetailActionToolbar(
             if (canDelete) CircularToolbarIcon(FeedflowIconMap.symbol("trash.fill"), stringResource(R.string.delete), onDelete)
             CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
             CircularToolbarIcon(
+                icon = if (isSpeaking) FeedflowIconMap.symbol("stop.fill") else FeedflowIconMap.symbol("speaker.wave.2.fill"),
+                label = stringResource(R.string.speak),
+                onClick = onSpeak,
+            )
+            CircularToolbarIcon(
                 icon = if (isBookmarked) FeedflowIconMap.symbol("bookmark.fill") else FeedflowIconMap.symbol("bookmark"),
                 label = stringResource(R.string.bookmark),
                 onClick = onToggleBookmark,
             )
+            CircularToolbarIcon(FeedflowIconMap.symbol("square.and.arrow.up"), stringResource(R.string.share), onShare)
             CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), "AI Summary", onAiSummary)
             CircularToolbarIcon(FeedflowIconMap.symbol("safari.fill"), stringResource(R.string.browser), onOpenBrowser)
+            CircularToolbarIcon(FeedflowIconMap.symbol("arrow.up.forward.app"), stringResource(R.string.open_in_browser), onOpenExternal)
             CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.select_community), onHome)
         }
     }
@@ -2730,27 +2857,18 @@ private fun V2exTriangleSymbol(modifier: Modifier = Modifier, tint: Color) {
 @Composable
 private fun AvatarView(avatar: String, fallbackText: String, sizeDp: Int) {
     val initial = AvatarRenderingPolicy.fallbackInitial(fallbackText)
-    var bitmap by remember(avatar) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-    if (AvatarRenderingPolicy.isRemoteAvatar(avatar)) {
-        LaunchedEffect(avatar) {
-            bitmap = withContext(Dispatchers.IO) {
-                runCatching {
-                    URL(avatar).openStream().use { BitmapFactory.decodeStream(it)?.asImageBitmap() }
-                }.getOrNull()
-            }
-        }
-    }
     Box(
         modifier = Modifier.size(sizeDp.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f)),
         contentAlignment = Alignment.Center,
     ) {
-        val image = bitmap
-        if (image != null) {
-            Image(
-                bitmap = image,
+        if (AvatarRenderingPolicy.isRemoteAvatar(avatar)) {
+            coil.compose.SubcomposeAsyncImage(
+                model = avatar,
                 contentDescription = "$fallbackText avatar",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+                loading = { Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) },
+                error = { Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) },
             )
         } else {
             Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
@@ -2783,7 +2901,7 @@ private fun FeedflowProgressLine(visible: Boolean) {
 }
 
 @Composable
-private fun ParsedContent(content: String) {
+private fun ParsedContent(content: String, onImageClick: ((String) -> Unit)? = null) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FeedflowContentRenderer.parseBlocks(content).forEach { block ->
             when (block) {
@@ -2800,10 +2918,15 @@ private fun ParsedContent(content: String) {
                         LinkedText(block.segments)
                     }
                 }
-                is ContentBlock.Image -> ForumCard(contentAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(R.string.image), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    Text(block.url, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                }
+                is ContentBlock.Image -> coil.compose.AsyncImage(
+                    model = block.url,
+                    contentDescription = null,
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .then(if (onImageClick != null) Modifier.clickable { onImageClick(block.url) } else Modifier),
+                )
             }
         }
     }

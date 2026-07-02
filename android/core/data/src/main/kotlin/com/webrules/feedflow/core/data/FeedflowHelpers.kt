@@ -6,6 +6,7 @@ import com.webrules.feedflow.core.model.FeedThread
 import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.model.User
 import com.webrules.feedflow.core.network.FeedflowCookie
+import kotlinx.serialization.json.JsonObject
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
@@ -696,6 +697,54 @@ object HackerNewsContentCleaner {
                 .map { it.value }
                 .distinct()
                 .toList()
+
+        fun typeDescription(type: String?): String = when (type) {
+            "answer" -> "回答"
+            "article" -> "文章"
+            "zvideo" -> "视频"
+            "question" -> "问题"
+            "pin" -> "想法"
+            else -> type ?: "未知"
+        }
+
+        fun effectiveTitle(target: JsonObject): String {
+            val type = target.str("type")
+            if (type == "answer") {
+                target.obj("question").str("title")?.takeIf { it.isNotEmpty() }?.let { return it.decodeHtmlEntities() }
+            }
+            return (target.str("title") ?: "Untitled").decodeHtmlEntities()
+        }
+
+        fun filterReason(target: JsonObject): String? {
+            val votes = target.int("voteup_count") ?: 0
+            val author = target.obj("author")
+            val followers = author.int("follower_count") ?: 0
+            val isFollowing = author.bool("is_following") ?: false
+            return when (target.str("type")) {
+                "answer" -> if (votes < 10 && !isFollowing) "规则：回答；赞数 < 10，未关注作者" else null
+                "article" -> if ((followers < 50 || votes < 20) && !isFollowing) "规则：文章" else null
+                "zvideo" -> if (followers < 50 && votes < 20 && !isFollowing) "规则：视频" else null
+                else -> null
+            }
+        }
+
+        fun author(obj: JsonObject?, fallbackName: String = "匿名用户"): User = User(
+            id = obj.str("id") ?: obj.str("url_token") ?: "",
+            username = obj.str("name")?.takeIf { it.isNotBlank() } ?: fallbackName,
+            avatar = normalizedAvatarUrl(obj.str("avatar_url"), obj.str("avatar_url_template")),
+            role = obj.str("headline")?.takeIf { it.isNotBlank() },
+        )
+
+        fun formatTimestamp(seconds: Int?): String {
+            if (seconds == null || seconds <= 0) return ""
+            return HackerNewsContentCleaner.timeAgo(seconds.toLong())
+        }
+
+        fun cleanSearchText(text: String): String =
+            text.replace(Regex("""</?(?:em|b|strong|span|highlight)[^>]*>""", RegexOption.IGNORE_CASE), "")
+                .stripTags()
+                .decodeHtmlEntities()
+                .trim()
     }
 
     object DiscourseParser {
@@ -762,4 +811,81 @@ object HackerNewsContentCleaner {
             url.startsWith("/") -> "$baseUrl$url"
             else -> "$baseUrl/$url"
         }
+
+        fun relativeTime(iso: String?): String {
+            if (iso.isNullOrBlank()) return ""
+            val instant = runCatching { Instant.parse(iso) }.getOrNull() ?: return ""
+            return HackerNewsContentCleaner.timeAgo(instant.epochSecond)
+        }
+
+        fun parseTopicList(json: String, community: Community): List<FeedThread> {
+            val root = ZhihuJson.parse(json)?.obj() ?: return emptyList()
+            val usersById = mutableMapOf<Int, JsonObject>()
+            root.arr("users")?.forEach { element ->
+                val user = element.obj() ?: return@forEach
+                user.int("id")?.let { usersById[it] = user }
+            }
+            val topics = root.obj("topic_list").arr("topics") ?: root.arr("topics") ?: return emptyList()
+            return topics.mapNotNull { element ->
+                val topic = element.obj() ?: return@mapNotNull null
+                val id = topic.int("id")?.toString() ?: return@mapNotNull null
+                val posters = topic.arr("posters")
+                val originalPosterId = posters?.firstOrNull()?.obj()?.int("user_id")
+                val posterUser = originalPosterId?.let { usersById[it] }
+                val authorName = posterUser.str("username") ?: "Linux.do"
+                val avatar = posterUser.str("avatar_template")?.let { resolveAvatar(it) } ?: "person.circle"
+                FeedThread(
+                    id = id,
+                    title = (topic.str("title") ?: "").decodeHtmlEntities(),
+                    content = (topic.str("excerpt") ?: "").stripTags().decodeHtmlEntities(),
+                    author = User(originalPosterId?.toString() ?: "linux_do", authorName, avatar),
+                    community = community,
+                    timeAgo = relativeTime(topic.str("created_at")),
+                    likeCount = topic.int("like_count") ?: 0,
+                    commentCount = (topic.int("posts_count") ?: 1).minus(1).coerceAtLeast(0),
+                    lastPostTime = relativeTime(topic.str("last_posted_at")),
+                )
+            }
+        }
+
+        fun parseThreadDetail(json: String, threadId: String): Triple<FeedThread, List<Comment>, Int?> {
+            val root = ZhihuJson.parse(json)?.obj()
+            val title = (root.str("title") ?: "Linux.do").decodeHtmlEntities()
+            val categoryId = root.int("category_id")?.toString().orEmpty()
+            val community = Community(
+                categoryId.ifBlank { "latest" },
+                categoryId.ifBlank { "Latest" },
+                "",
+                "linux_do",
+                0,
+                0,
+            )
+            val posts = root.obj("post_stream").arr("posts").orEmpty().mapNotNull { element ->
+                val post = element.obj() ?: return@mapNotNull null
+                val username = post.str("username") ?: "anonymous"
+                val avatar = post.str("avatar_template")?.let { resolveAvatar(it) } ?: "person.circle"
+                Comment(
+                    id = post.int("id")?.toString() ?: return@mapNotNull null,
+                    author = User(post.int("user_id")?.toString() ?: username, username, avatar),
+                    content = cleanCooked(post.str("cooked").orEmpty()),
+                    timeAgo = relativeTime(post.str("created_at")),
+                    likeCount = post.int("reply_count") ?: 0,
+                )
+            }
+            val firstPost = posts.firstOrNull()
+            val postsCount = root.int("posts_count") ?: posts.size
+            val thread = FeedThread(
+                id = threadId,
+                title = title,
+                content = firstPost?.content.orEmpty(),
+                author = firstPost?.author ?: User("linux_do", "Linux.do", "terminal.fill"),
+                community = community,
+                timeAgo = firstPost?.timeAgo.orEmpty(),
+                likeCount = firstPost?.likeCount ?: 0,
+                commentCount = (postsCount - 1).coerceAtLeast(0),
+            )
+            val totalPages = null
+            return Triple(thread, posts.drop(1), totalPages)
+        }
     }
+
