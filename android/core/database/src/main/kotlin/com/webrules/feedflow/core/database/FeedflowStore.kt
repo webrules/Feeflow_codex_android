@@ -411,7 +411,7 @@ object FeedflowPersistenceCodecs {
 
     fun decodeCookies(value: String, nowMillis: Long = System.currentTimeMillis()): List<FeedflowCookie> =
         if (value.trim().startsWith("[")) {
-            Regex("""\{[^{}]*}""").findAll(value).mapNotNull { match ->
+            Regex("""\{[^{}]*\}""").findAll(value).mapNotNull { match ->
                 val json = match.value
                 val expiresAt = jsonNumber(json, "expires")?.times(1000)?.toLong()
                 if (expiresAt != null && expiresAt < nowMillis) {

@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1734,7 +1735,7 @@ private fun WebLoginSheetScreen(
             }
         },
     ) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
+        ForumBackground(Modifier.padding(padding).imePadding()) {
             if (accepted) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     ForumCard(contentAlignment = Alignment.CenterHorizontally) {
@@ -1806,7 +1807,7 @@ private fun InAppBrowserScreen(
             }
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             ToolbarCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                     TextButton(enabled = canGoBack, onClick = { webViewRef?.goBack() }) { Text(stringResource(R.string.back)) }

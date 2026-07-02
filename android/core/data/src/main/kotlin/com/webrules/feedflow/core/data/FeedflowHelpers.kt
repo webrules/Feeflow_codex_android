@@ -749,7 +749,7 @@ object HackerNewsContentCleaner {
 
     object DiscourseParser {
         fun parseCategories(json: String): List<Community> {
-            val parsed = Regex("""\{[^{}]*"id"\s*:\s*\d+[^{}]*"name"\s*:\s*"[^"]+"[^{}]*}""")
+            val parsed = Regex("""\{[^{}]*"id"\s*:\s*\d+[^{}]*"name"\s*:\s*"[^"]+"[^{}]*\}""")
                 .findAll(json)
                 .mapNotNull {
                     val block = it.value
