@@ -101,6 +101,13 @@ iOSInjectionProject/
 *.db-shm
 *.db-wal
 
+# Android
+.gradle/
+local.properties
+captures/
+*.apk
+*.ap_
+
 # Compiled Object files
 *.o
 *.obj

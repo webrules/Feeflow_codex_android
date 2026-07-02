@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Feedflow" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/forum_background</item>
+        <item name="android:colorAccent">@color/forum_accent</item>
+        <item name="android:navigationBarColor">@color/forum_background</item>
+        <item name="android:statusBarColor">@color/forum_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

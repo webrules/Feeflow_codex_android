@@ -1,0 +1,765 @@
+package com.webrules.feedflow.core.data
+
+import com.webrules.feedflow.core.model.Comment
+import com.webrules.feedflow.core.model.Community
+import com.webrules.feedflow.core.model.FeedThread
+import com.webrules.feedflow.core.model.ForumSite
+import com.webrules.feedflow.core.model.User
+import com.webrules.feedflow.core.network.FeedflowCookie
+import java.net.URLDecoder
+import java.net.URLEncoder
+import java.nio.charset.Charset
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.util.Locale
+import org.w3c.dom.Element
+import java.io.ByteArrayInputStream
+import javax.xml.parsers.DocumentBuilderFactory
+
+class CommunitySettingsManager {
+    private val disabled = linkedSetOf<ForumSite>()
+    fun isEnabled(site: ForumSite): Boolean = site == ForumSite.Rss || !disabled.contains(site)
+    fun toggle(site: ForumSite) {
+        if (site == ForumSite.Rss) return
+        if (!disabled.add(site)) disabled.remove(site)
+    }
+    val visibleSites: List<ForumSite> get() = ForumSite.entries.filter(::isEnabled)
+}
+
+data class OAuthOption(val name: String, val url: String)
+
+data class SiteLoginConfig(
+    val site: ForumSite,
+    val cookieDomain: String,
+    val loginUrl: String,
+    val requiredCookieName: String? = null,
+    val authCookieNameFragments: List<String> = emptyList(),
+    val oauthOptions: List<OAuthOption> = emptyList(),
+) {
+    fun hasAuthenticatedSession(cookies: List<FeedflowCookie>): Boolean =
+        siteCookies(cookies).any { cookie ->
+            requiredCookieName?.let { cookie.name == it } == true ||
+                authCookieNameFragments.any { fragment -> cookie.name.contains(fragment, ignoreCase = true) }
+        }
+
+    fun siteCookies(cookies: List<FeedflowCookie>): List<FeedflowCookie> =
+        cookies.filter { it.domain.lowercase().trimStart('.').endsWith(cookieDomain) }
+
+    fun isLoginUrl(url: String?): Boolean = url?.contains(loginUrl.substringAfter("://").substringBefore("?")) == true
+    fun isPostLoginNavigation(url: String?): Boolean = url?.contains(cookieDomain) == true && !isLoginUrl(url)
+    fun shouldCheckCookies(url: String?): Boolean = url?.contains(cookieDomain) == true
+
+    companion object {
+        fun forSite(site: ForumSite): SiteLoginConfig? = when (site) {
+            ForumSite.Rss -> null
+            ForumSite.FourD4Y -> SiteLoginConfig(
+                site = site,
+                cookieDomain = "4d4y.com",
+                loginUrl = "https://www.4d4y.com/forum/logging.php?action=login",
+                authCookieNameFragments = listOf("auth", "login", "member"),
+            )
+            ForumSite.LinuxDo -> SiteLoginConfig(
+                site = site,
+                cookieDomain = "linux.do",
+                loginUrl = "https://linux.do/login",
+                authCookieNameFragments = listOf("_t", "remember_user_token"),
+                oauthOptions = listOf("Google", "GitHub", "X", "Discord", "Apple", "Passkey").map { OAuthOption(it, "") },
+            )
+            ForumSite.V2ex -> SiteLoginConfig(
+                site = site,
+                cookieDomain = "v2ex.com",
+                loginUrl = "https://v2ex.com/signin",
+                authCookieNameFragments = listOf("a2"),
+                oauthOptions = listOf(OAuthOption("Google", ""), OAuthOption("Solana", "")),
+            )
+            ForumSite.HackerNews -> SiteLoginConfig(
+                site = site,
+                cookieDomain = "ycombinator.com",
+                loginUrl = "https://news.ycombinator.com/login",
+                requiredCookieName = "user",
+            )
+            ForumSite.Zhihu -> SiteLoginConfig(
+                site = site,
+                cookieDomain = "zhihu.com",
+                loginUrl = "https://www.zhihu.com/signin",
+                requiredCookieName = "z_c0",
+            )
+        }
+}
+}
+
+class LocalizationManager {
+    var currentLanguage: String = "en"
+    private val en = mapOf(
+        "login" to "Login", "cancel" to "Cancel", "done" to "Done", "save" to "Save",
+        "close" to "Close", "error" to "Error", "select_community" to "Select Community",
+        "settings" to "Settings", "bookmarks" to "Bookmarks", "ai_assistant" to "AI Assistant",
+        "reply" to "Reply", "reply_failed" to "Reply failed", "new_thread" to "New Thread",
+        "post_failed" to "Post failed", "thread_title" to "Thread title", "share_thoughts" to "Share your thoughts",
+        "signed_in" to "Signed in", "signed_out" to "Signed out", "logout" to "Logout",
+        "save_session" to "Save session", "login_with_browser" to "Login with browser",
+        "login_to_site" to "Login to site", "login_success" to "Login success",
+        "communities" to "Communities", "manage_feeds" to "Manage feeds",
+        "daily_rss_summary" to "Daily RSS Summary", "browser" to "Browser",
+        "thread_bookmarks" to "Thread Bookmarks", "url_bookmarks" to "URL Bookmarks",
+    )
+    private val zh = en.mapValues { (_, value) -> value }
+    fun localizedString(key: String): String = (if (currentLanguage == "zh") zh else en)[key] ?: key
+}
+
+object SpeechServiceState {
+    var isSpeaking: Boolean = false
+        private set
+    fun stop() {
+        isSpeaking = false
+    }
+}
+
+object ImageZoom {
+    fun clampScale(value: Float, min: Float, max: Float): Float = value.coerceIn(min, max)
+}
+
+fun String.decodeHtmlEntities(): String {
+    val named = mapOf("&amp;" to "&", "&lt;" to "<", "&gt;" to ">", "&quot;" to "\"", "&apos;" to "'", "&nbsp;" to " ", "&mdash;" to "—", "&ndash;" to "–")
+    var decoded = this
+    named.forEach { (entity, value) -> decoded = decoded.replace(entity, value) }
+    decoded = Regex("""&#(\d+);""").replace(decoded) { match ->
+        match.groupValues[1].toIntOrNull()?.takeIf { it in 0..0x10FFFF }?.let { String(Character.toChars(it)) } ?: match.value
+    }
+    decoded = Regex("""&#x([0-9a-fA-F]+);""").replace(decoded) { match ->
+        match.groupValues[1].toIntOrNull(16)?.takeIf { it in 0..0x10FFFF }?.let { String(Character.toChars(it)) } ?: match.value
+    }
+    return decoded
+}
+
+fun String.stripTags(): String = replace(Regex("<[^>]+>"), "").replace(Regex("\\s+"), " ").trim()
+
+fun String.jsonUnescape(): String =
+    replace("\\\"", "\"")
+        .replace("\\/", "/")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace("\\u003c", "<")
+        .replace("\\u003e", ">")
+        .replace("\\u0026", "&")
+
+data class ParsedFeedItem(
+    val title: String,
+    val link: String,
+    val content: String,
+    val timeAgo: String = "Recent",
+    val author: String = "Author",
+    val id: String = link,
+)
+data class OpmlFeed(val title: String, val url: String)
+
+class RssParser(private val data: ByteArray) {
+    fun parse(): List<ParsedFeedItem> {
+        val xml = data.toString(Charsets.UTF_8)
+        val domItems = runCatching {
+        val document = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        }.newDocumentBuilder().parse(ByteArrayInputStream(data))
+        val rssItems = document.getElementsByTagName("item")
+        if (rssItems.length > 0) {
+            (0 until rssItems.length).map { index ->
+                val element = rssItems.item(index) as Element
+                val link = element.textAny("link")
+                ParsedFeedItem(
+                    title = element.textAny("title").decodeHtmlEntities(),
+                    link = link,
+                    content = element.firstText("description", "content:encoded", "encoded", "content", "summary").decodeHtmlEntities(),
+                    timeAgo = formatFeedDate(element.firstText("pubDate", "updated", "published", "dc:date")),
+                    author = element.firstText("author", "dc:creator", "creator").ifBlank { "Author" },
+                    id = element.firstText("guid", "id").ifBlank { link },
+                )
+            }
+        } else {
+            val entries = document.getElementsByTagNameNS("*", "entry")
+            (0 until entries.length).map { index ->
+                val element = entries.item(index) as Element
+                val link = element.atomLink()
+                ParsedFeedItem(
+                    title = element.textAny("title").decodeHtmlEntities(),
+                    link = link,
+                    content = element.firstText("content", "summary", "description").decodeHtmlEntities(),
+                    timeAgo = formatFeedDate(element.firstText("updated", "published", "dc:date", "pubDate")),
+                    author = element.firstText("name", "author", "dc:creator", "creator").ifBlank { "Author" },
+                    id = element.firstText("id", "guid").ifBlank { link },
+                )
+            }
+        }
+        }.getOrDefault(emptyList())
+        return domItems.ifEmpty { parseByRegex(xml) }
+    }
+
+    private fun formatFeedDate(dateString: String): String {
+        val value = dateString.trim()
+        if (value.isEmpty()) return "Recent"
+        val now = Instant.now()
+        val parsed = runCatching {
+            DateTimeFormatter.RFC_1123_DATE_TIME.withLocale(Locale.US).parse(value, Instant::from)
+        }.getOrElse {
+            try {
+                Instant.parse(value)
+            } catch (_: DateTimeParseException) {
+                null
+            }
+        } ?: return "Recent"
+        val seconds = Duration.between(parsed, now).seconds
+        return when {
+            seconds < 60 -> "just now"
+            seconds < 3_600 -> "${seconds / 60}m"
+            seconds < 86_400 -> "${seconds / 3_600}h"
+            else -> "${seconds / 86_400}d"
+        }
+    }
+
+        private fun parseByRegex(xml: String): List<ParsedFeedItem> {
+            val rssItems = Regex("""<item\b[^>]*>(.*?)</item>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .findAll(xml)
+                .map { it.groupValues[1] }
+                .toList()
+            if (rssItems.isNotEmpty()) {
+                return rssItems.map { block ->
+                    val link = block.tagText("link")
+                    ParsedFeedItem(
+                        title = block.tagText("title").decodeHtmlEntities(),
+                        link = link,
+                        content = block.tagText("description", "content:encoded", "encoded", "content", "summary").decodeHtmlEntities(),
+                        timeAgo = formatFeedDate(block.tagText("pubDate", "updated", "published", "dc:date")),
+                        author = block.tagText("author", "dc:creator", "creator").ifBlank { "Author" },
+                        id = block.tagText("guid", "id").ifBlank { link },
+                    )
+                }
+            }
+            return Regex("""<entry\b[^>]*>(.*?)</entry>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .findAll(xml)
+                .map { it.groupValues[1] }
+                .map { block ->
+                    val link = block.atomLinkText()
+                    ParsedFeedItem(
+                        title = block.tagText("title").decodeHtmlEntities(),
+                        link = link,
+                        content = block.tagText("content", "summary", "description").decodeHtmlEntities(),
+                        timeAgo = formatFeedDate(block.tagText("updated", "published", "dc:date", "pubDate")),
+                        author = block.tagText("name", "author", "dc:creator", "creator").ifBlank { "Author" },
+                        id = block.tagText("id", "guid").ifBlank { link },
+                    )
+                }
+                .toList()
+        }
+    }
+
+    private fun String.tagText(vararg tags: String): String =
+        tags.firstNotNullOfOrNull { tag ->
+            val escaped = Regex.escape(tag)
+            Regex("""<$escaped\b[^>]*>(.*?)</$escaped>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .find(this)
+                ?.groupValues
+                ?.get(1)
+                ?.stripCdata()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        }.orEmpty()
+
+    private fun String.stripCdata(): String =
+        replace(Regex("""^\s*<!\[CDATA\[""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\]\]>\s*$"""), "")
+
+    private fun String.atomLinkText(): String {
+        Regex("""<link\b([^>]*)/?>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .findAll(this)
+            .forEach { match ->
+                val attributes = match.groupValues[1]
+                val rel = Regex("""\brel=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(attributes)?.groupValues?.get(1).orEmpty()
+                val href = Regex("""\bhref=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(attributes)?.groupValues?.get(1).orEmpty()
+                if (href.isNotBlank() && (rel.isBlank() || rel == "alternate")) return href
+            }
+            return tagText("link")
+    }
+
+class OpmlParser(private val data: ByteArray) {
+    fun parse(): List<OpmlFeed> = runCatching {
+        val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(ByteArrayInputStream(data))
+        val outlines = document.getElementsByTagName("outline")
+        (0 until outlines.length).mapNotNull { index ->
+            val element = outlines.item(index) as Element
+            val url = element.getAttribute("xmlUrl")
+            if (url.isBlank()) {
+                null
+            } else {
+                OpmlFeed(element.getAttribute("text").ifBlank { element.getAttribute("title").ifBlank { url } }, url)
+            }
+        }
+    }.getOrDefault(emptyList())
+}
+
+private fun Element.text(tag: String): String =
+    (getElementsByTagName(tag).item(0)?.textContent ?: getElementsByTagNameNS("*", tag).item(0)?.textContent).orEmpty()
+
+private fun Element.textAny(tag: String): String =
+    getElementsByTagName(tag).item(0)?.textContent?.trim()
+        ?: getElementsByTagNameNS("*", tag.substringAfter(':')).item(0)?.textContent?.trim()
+        ?: ""
+
+private fun Element.firstText(vararg tags: String): String =
+    tags.firstNotNullOfOrNull { tag -> textAny(tag).takeIf { it.isNotBlank() } }.orEmpty()
+
+private fun Element.atomLink(): String {
+    val links = getElementsByTagNameNS("*", "link")
+    for (index in 0 until links.length) {
+        val link = links.item(index) as? Element ?: continue
+        val rel = link.getAttribute("rel")
+        val href = link.getAttribute("href")
+        if (href.isNotBlank() && (rel.isBlank() || rel == "alternate")) return href
+    }
+    return textAny("link")
+}
+
+object RssContentCleaner {
+    fun clean(html: String): String {
+        var processed = html
+            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
+        processed = Regex("<img[^>]+src=[\"']([^\"'>]+)[\"'][^>]*>", RegexOption.IGNORE_CASE)
+            .replace(processed) { "\n[IMAGE:${it.groupValues[1]}]\n" }
+        processed = processed
+            .replace("<br />", "\n")
+            .replace("<br>", "\n")
+            .replace("</p>", "\n\n")
+            .replace("<p>", "")
+            .replace("</div>", "\n")
+        processed = Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) {
+                val href = it.groupValues[1]
+                if (href.startsWith("#") || href.startsWith("javascript:", ignoreCase = true)) {
+                    it.groupValues[2].stripTags()
+                } else {
+                    val title = it.groupValues[2].stripTags().ifBlank { href }
+                    "[LINK:$href|$title]"
+                }
+            }
+        return processed.stripTags().decodeHtmlEntities()
+            .replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n")
+            .trim()
+    }
+}
+
+data class HnItem(
+    val id: Int,
+    val type: String? = null,
+    val by: String? = null,
+    val time: Long = 0,
+    val text: String? = null,
+    val url: String? = null,
+    val title: String? = null,
+    val score: Int? = null,
+    val descendants: Int? = null,
+    val kids: List<Int>? = null,
+    val deleted: Boolean = false,
+    val dead: Boolean = false,
+)
+
+object HackerNewsJson {
+    fun parseIds(json: String): List<Int> =
+        Regex("\\d+").findAll(json).map { it.value.toInt() }.toList()
+
+    fun parseItem(json: String): HnItem? {
+        val id = int(json, "id") ?: return null
+        return HnItem(
+            id = id,
+            type = string(json, "type"),
+            by = string(json, "by"),
+            time = int(json, "time")?.toLong() ?: 0L,
+            text = string(json, "text"),
+            url = string(json, "url"),
+            title = string(json, "title"),
+            score = int(json, "score"),
+            descendants = int(json, "descendants"),
+            kids = kids(json),
+            deleted = bool(json, "deleted"),
+            dead = bool(json, "dead"),
+        )
+    }
+
+    private fun string(json: String, key: String): String? =
+        Regex("\"$key\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(json)?.groupValues?.get(1)
+            ?.replace("\\\"", "\"")
+            ?.replace("\\/", "/")
+            ?.replace("\\n", "\n")
+
+    private fun int(json: String, key: String): Int? =
+        Regex("\"$key\"\\s*:\\s*(\\d+)").find(json)?.groupValues?.get(1)?.toIntOrNull()
+
+    private fun bool(json: String, key: String): Boolean =
+        Regex("\"$key\"\\s*:\\s*true").containsMatchIn(json)
+
+    private fun kids(json: String): List<Int>? =
+        Regex("\"kids\"\\s*:\\s*\\[([^]]*)]").find(json)?.groupValues?.get(1)
+            ?.let { Regex("\\d+").findAll(it).map { match -> match.value.toInt() }.toList() }
+}
+
+object HackerNewsSearchJson {
+    fun parse(json: String, community: Community): SearchResult {
+        val objectIdRegex = Regex("\"objectID\"\\s*:\\s*\"?(\\d+)\"?")
+        val hits = objectIdRegex.findAll(json).mapNotNull { match ->
+            val segment = json.substring(
+                startIndex = (match.range.first - 2_000).coerceAtLeast(0),
+                endIndex = (match.range.last + 500).coerceAtMost(json.length),
+            )
+            val id = match.groupValues[1]
+            val title = string(segment, "title") ?: string(segment, "story_title") ?: return@mapNotNull null
+            FeedThread(
+                id = id,
+                title = title.decodeJsonString(),
+                content = (string(segment, "url") ?: string(segment, "story_url")).orEmpty().decodeJsonString(),
+                author = User(
+                    id = string(segment, "author").orEmpty().ifBlank { "unknown" },
+                    username = string(segment, "author").orEmpty().ifBlank { "unknown" },
+                    avatar = "person.circle.fill",
+                ),
+                community = community,
+                timeAgo = int(segment, "created_at_i")?.toLong()?.let(HackerNewsContentCleaner::timeAgo).orEmpty(),
+                likeCount = int(segment, "points") ?: 0,
+                commentCount = int(segment, "num_comments") ?: 0,
+            )
+        }.toList()
+        val hasMore = int(json, "nbPages")?.let { pageCount ->
+            val page = int(json, "page") ?: 0
+            page + 1 < pageCount
+        } ?: false
+        return SearchResult(hits, hasMore)
+    }
+
+    private fun string(json: String, key: String): String? =
+        Regex("\"$key\"\\s*:\\s*(?:\"((?:[^\"\\\\]|\\\\.)*)\"|null)").find(json)?.groupValues?.get(1)
+            ?.takeIf { it.isNotBlank() }
+
+    private fun int(json: String, key: String): Int? =
+        Regex("\"$key\"\\s*:\\s*(-?\\d+)").find(json)?.groupValues?.get(1)?.toIntOrNull()
+
+    private fun String.decodeJsonString(): String =
+        replace("\\\"", "\"")
+            .replace("\\/", "/")
+            .replace("\\n", "\n")
+            .replace("\\u003c", "<")
+            .replace("\\u003e", ">")
+            .decodeHtmlEntities()
+}
+
+object HackerNewsContentCleaner {
+    fun clean(html: String): String {
+        var processed = html
+            .replace("<p>", "\n\n")
+            .replace("<pre><code>", "\n```\n")
+            .replace("</code></pre>", "\n```\n")
+            .replace("<i>", "_")
+            .replace("</i>", "_")
+        processed = Regex("<a href=\"([^\"]+)\"[^>]*>([^<]+)</a>", RegexOption.IGNORE_CASE)
+            .replace(processed) { it.groupValues[1] }
+        processed = processed.replace(Regex("<[^>]+>"), "")
+        return processed
+            .replace("&hellip;", "...")
+            .decodeHtmlEntities()
+            .replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n")
+            .replace(Regex("\\n\\s+\\n"), "\n\n")
+            .trim()
+    }
+
+    fun timeAgo(epochSeconds: Long, now: Instant = Instant.now()): String {
+        val seconds = Duration.between(Instant.ofEpochSecond(epochSeconds).atOffset(ZoneOffset.UTC), now.atOffset(ZoneOffset.UTC)).seconds
+        return when {
+            seconds < 60 -> "just now"
+            seconds < 3_600 -> "${seconds / 60}m"
+            seconds < 86_400 -> "${seconds / 3_600}h"
+            else -> "${seconds / 86_400}d"
+        }
+    }
+}
+
+    object FourD4YParser {
+        private val gb18030: Charset = Charset.forName("GB18030")
+
+        fun decodeForumBytes(bytes: ByteArray): String = String(bytes, gb18030)
+
+        fun encodeFormValue(value: String): String = URLEncoder.encode(value, gb18030.name())
+
+        fun extractSid(html: String): String? =
+            Regex("""sid=([a-zA-Z0-9]+)""").find(html)?.groupValues?.get(1)
+
+        fun extractFormHash(html: String): String? {
+            val patterns = listOf(
+                """formhash=([a-zA-Z0-9]+)""",
+                """name=["']formhash["'][^>]*value=["']([a-zA-Z0-9]+)["']""",
+                """value=["']([a-zA-Z0-9]+)["'][^>]*name=["']formhash["']""",
+                """formhash\s*[:=]\s*["']?([a-zA-Z0-9]+)["']?""",
+            )
+            return patterns.firstNotNullOfOrNull { pattern ->
+                Regex(pattern, RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+            }
+        }
+
+        fun isLoggedInIndex(html: String): Boolean {
+            val hasForumLinks = html.contains("forumdisplay.php?fid=", ignoreCase = true)
+            val hasLogout = html.contains("action=logout", ignoreCase = true) || html.contains("退出")
+            val hasLoginWithoutLogout = html.contains("action=login", ignoreCase = true) && !hasLogout
+            val isChallenge = html.contains("cloudflare", ignoreCase = true) || html.contains("checking your browser", ignoreCase = true)
+            return hasForumLinks && hasLogout && !hasLoginWithoutLogout && !isChallenge
+        }
+
+        fun parseCategories(html: String): List<Community> =
+            Regex("""href=["']forumdisplay\.php\?fid=(\d+)[^"']*["'][^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
+                .findAll(html)
+                .map {
+                    Community(
+                        id = it.groupValues[1],
+                        name = it.groupValues[2].decodeHtmlEntities(),
+                        description = "",
+                        category = "4D4Y",
+                        activeToday = 0,
+                        onlineNow = 0,
+                    )
+                }
+                .distinctBy { it.id }
+                .toList()
+
+        fun parseThreadRows(html: String, community: Community): List<FeedThread> =
+            Regex("""<tbody[^>]*id=["'](?:normalthread_|thread_)(\d+)["'][^>]*>(.*?)</tbody>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .findAll(html)
+                .mapNotNull { match ->
+                    val tid = match.groupValues[1]
+                    val row = match.groupValues[2]
+                    val title = Regex("""href=["']viewthread\.php\?tid=\d+[^"']*["'][^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
+                        .find(row)?.groupValues?.get(1)?.decodeHtmlEntities() ?: return@mapNotNull null
+                    val author = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
+                        .find(row)
+                    val authorId = author?.groupValues?.getOrNull(1).orEmpty()
+                    val authorName = author?.groupValues?.getOrNull(2)?.decodeHtmlEntities() ?: "unknown"
+                    val replies = Regex("""<td[^>]*class=["']nums["'][^>]*>.*?<strong>(\d+)</strong>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                        .find(row)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    FeedThread(
+                        id = tid,
+                        title = title,
+                        content = "",
+                        author = User(
+                            id = authorId,
+                            username = authorName,
+                            avatar = if (authorId.isNotBlank()) avatarUrlForUid(authorId) else "person.circle",
+                        ),
+                        community = community,
+                        timeAgo = "",
+                        likeCount = 0,
+                        commentCount = replies,
+                    )
+                }.toList()
+
+        fun avatarUrlForUid(uid: String): String {
+            val numeric = uid.trim().toLongOrNull() ?: return "person.circle"
+            val padded = numeric.toString().padStart(9, '0')
+            return "https://img02.4d4y.com/forum/uc_server/data/avatar/${padded.substring(0, 3)}/${padded.substring(3, 5)}/${padded.substring(5, 7)}/${padded.substring(7, 9)}_avatar_middle.jpg"
+        }
+
+        fun cleanContent(html: String): String {
+            var processed = html
+                .replace(Regex("""<div class=["']t_attach["'][\s\S]*?</div>""", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("""<ignore_js_op>[\s\S]*?</ignore_js_op>""", RegexOption.IGNORE_CASE), "")
+            processed = Regex("""<blockquote[^>]*>([\s\S]*?)</blockquote>""", RegexOption.IGNORE_CASE)
+                .replace(processed) { "[QUOTE]${it.groupValues[1].stripTags().decodeHtmlEntities()}[/QUOTE]" }
+            processed = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE)
+                .replace(processed) {
+                    val src = it.groupValues[1]
+                    if (src.contains("smilies", ignoreCase = true) || src.contains("avatar", ignoreCase = true)) "" else "\n[IMAGE:$src]\n"
+                }
+            processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) {
+                    val href = it.groupValues[1]
+                    if (href.startsWith("#") || href.startsWith("javascript:", ignoreCase = true)) {
+                        it.groupValues[2].stripTags()
+                    } else {
+                        "[LINK:$href|${it.groupValues[2].stripTags().decodeHtmlEntities().ifBlank { href }}]"
+                    }
+                }
+            return processed.stripTags().decodeHtmlEntities().replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n").trim()
+        }
+    }
+
+    data class V2exTopic(val id: String, val title: String, val author: String, val replies: Int)
+    data class V2exReply(val id: String, val author: String, val content: String, val timeAgo: String)
+
+    object V2exParser {
+        val tabs = listOf("tech", "creative", "play", "apple", "jobs", "deals", "city", "qna", "hot", "all", "r2", "xna", "planet")
+
+        fun extractOnce(html: String): String? {
+            val patterns = listOf(
+                """name=["']once["'][^>]*value=["'](\d+)["']""",
+                """value=["'](\d+)["'][^>]*name=["']once["']""",
+                """var\s+once\s*=\s*["']?(\d+)["']?""",
+                """['"]once['"]\s*:\s*['"]?(\d+)['"]?""",
+                """once=(\d+)""",
+            )
+            return patterns.firstNotNullOfOrNull { Regex(it, RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1) }
+        }
+
+        fun parseThreadList(html: String): List<V2exTopic> =
+            html.split(Regex("""class=["'][^"']*cell item[^"']*["']""", RegexOption.IGNORE_CASE))
+                .drop(1)
+                .mapNotNull { cell ->
+                    val topic = Regex("""<a href=["']/t/(\d+)[^"']*["'] class=["']topic-link["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(cell)
+                        ?: return@mapNotNull null
+                    val author = Regex("""href=["']/member/([^"']+)["']""", RegexOption.IGNORE_CASE).find(cell)?.groupValues?.get(1).orEmpty()
+                    val replies = Regex("""class=["']count_livid["']>(\d+)</a>""", RegexOption.IGNORE_CASE).find(cell)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    V2exTopic(topic.groupValues[1], topic.groupValues[2].stripTags().decodeHtmlEntities(), author, replies)
+                }
+
+        fun parseReplies(html: String): List<V2exReply> =
+            html.split(Regex("""id=["']r_""", RegexOption.IGNORE_CASE)).drop(1).mapNotNull { block ->
+                val id = Regex("""^(\d+)""").find(block)?.groupValues?.get(1) ?: return@mapNotNull null
+                val author = Regex("""class=["']dark["'][^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty()
+                val content = Regex("""class=["']reply_content["'][^>]*>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1)?.let(::cleanContent).orEmpty()
+                val time = Regex("""class=["']ago["'][^>]*>([^<]+)</span>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty()
+                V2exReply(id, author.decodeHtmlEntities(), content, time)
+            }
+
+        fun parseTopicTitle(html: String): String =
+            (
+                Regex("""class=["']topic_full_title["'][^>]*>([\s\S]*?)</""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+                    ?: Regex("""<h1[^>]*>([\s\S]*?)</h1>""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+                    ?: ""
+                ).stripTags().decodeHtmlEntities()
+
+        fun parseTopicContent(html: String): String =
+            Regex("""class=["']topic_content["'][^>]*>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.let(::cleanContent).orEmpty()
+
+        fun parseTopicAuthor(html: String): String =
+            Regex("""href=["']/member/([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1).orEmpty()
+
+        fun cleanContent(html: String): String =
+            Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE)
+                .replace(html) { "\n[IMAGE:${normalizeUrl(it.groupValues[1])}]\n" }
+                .replace("<br>", "\n")
+                .replace("<p>", "\n")
+                .stripTags()
+                .decodeHtmlEntities()
+
+        fun normalizeUrl(url: String): String = when {
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "https://v2ex.com$url"
+            else -> url
+        }
+    }
+
+    object ZhihuParser {
+        val categories = listOf(
+            Community("recommend", "Recommendations", "Zhihu personalized recommendations", "Zhihu", 0, 0),
+            Community("hot", "Hot", "Zhihu hot list", "Zhihu", 0, 0),
+        )
+
+        fun normalizedAvatarUrl(url: String?, template: String? = null): String {
+            val candidate = url?.takeIf { it.isNotBlank() } ?: template.orEmpty()
+            if (candidate.isBlank()) return ""
+            return candidate.replace("{size}", "80").replace("&amp;", "&").let { if (it.startsWith("//")) "https:$it" else it }
+        }
+
+        fun threadId(type: String, id: String): String = "${type}_$id"
+
+        fun shouldKeepRecommendation(type: String, voteCount: Int, followerCount: Int = 0, isFollowing: Boolean = false): Boolean = when {
+            type == "feed_advert" -> false
+            type == "answer" -> isFollowing || voteCount >= 10
+            type == "article" || type == "zvideo" -> isFollowing || followerCount >= 50 || voteCount >= 20
+            type == "question" -> true
+            else -> false
+        }
+
+        fun cleanHtml(html: String): String {
+            val seenImages = linkedSetOf<String>()
+            var processed = html.replace(Regex("""<noscript[\s\S]*?</noscript>""", RegexOption.IGNORE_CASE), "")
+            processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+                .replace(processed) { "[LINK:${it.groupValues[1]}|${it.groupValues[2].stripTags().decodeHtmlEntities()}]" }
+            processed = Regex("""<img[^>]+(?:src|data-original|data-actualsrc)=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE)
+                .replace(processed) {
+                    val url = normalizedAvatarUrl(it.groupValues[1])
+                    val key = url.substringBefore("?")
+                    if (url.startsWith("data:") || url.contains("equation") || !seenImages.add(key)) "" else "\n[IMAGE:$url]\n"
+                }
+            return processed.stripTags().decodeHtmlEntities().replace(Regex("\\s+"), " ").trim()
+        }
+
+        fun extractSearchUrls(html: String): List<String> =
+            Regex("""https?://www\.zhihu\.com/(?:question/\d+(?:/answer/\d+)?|p/\d+)""")
+                .findAll(html)
+                .map { it.value }
+                .distinct()
+                .toList()
+    }
+
+    object DiscourseParser {
+        fun parseCategories(json: String): List<Community> {
+            val parsed = Regex("""\{[^{}]*"id"\s*:\s*\d+[^{}]*"name"\s*:\s*"[^"]+"[^{}]*}""")
+                .findAll(json)
+                .mapNotNull {
+                    val block = it.value
+                    val id = jsonInt(block, "id")?.toString() ?: return@mapNotNull null
+                    val name = jsonString(block, "name") ?: return@mapNotNull null
+                    Community(
+                        id = id,
+                        name = name.decodeHtmlEntities(),
+                        description = jsonString(block, "description").orEmpty(),
+                        category = jsonString(block, "slug").orEmpty().ifBlank { "linux_do" },
+                        activeToday = jsonInt(block, "topic_count") ?: 0,
+                        onlineNow = 0,
+                    )
+                }
+                .toMutableList()
+            if (parsed.none { it.id == "latest" }) {
+                parsed.add(0, Community("latest", "Latest", "Latest topics", "linux_do", 0, 0))
+            }
+            return parsed
+        }
+
+        private fun jsonString(json: String, key: String): String? =
+            Regex(""""$key"\s*:\s*"([^"]*)"""").find(json)?.groupValues?.get(1)
+
+        private fun jsonInt(json: String, key: String): Int? =
+            Regex(""""$key"\s*:\s*(\d+)""").find(json)?.groupValues?.get(1)?.toIntOrNull()
+
+        fun cleanCooked(html: String, baseUrl: String = "https://linux.do"): String {
+            var processed = html
+                .replace(Regex("""<span[^>]*class=["'][^"']*(?:avatar|site-icon|crawler-post-meta)[^"']*["'][\s\S]*?</span>""", RegexOption.IGNORE_CASE), "")
+            processed = Regex("""<img[^>]*>""", RegexOption.IGNORE_CASE)
+                .replace(processed) {
+                    val tag = it.value
+                    val src = Regex("""src=["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1).orEmpty()
+                    val alt = Regex("""alt=["']([^"']*)["']""", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1).orEmpty()
+                    if (tag.contains("emoji", ignoreCase = true) || src.contains("emoji", ignoreCase = true)) {
+                        alt
+                    } else if (src.isNotBlank()) {
+                        "\n[IMAGE:${resolveUrl(src, baseUrl)}]\n"
+                    } else {
+                        alt
+                    }
+                }
+            return processed
+                .replace("<br>", "\n")
+                .replace("</p>", "\n\n")
+                .stripTags()
+                .decodeHtmlEntities()
+                .replace(Regex("\\s+\\n"), "\n")
+                .trim()
+        }
+
+        fun resolveAvatar(template: String, baseUrl: String = "https://linux.do"): String =
+            resolveUrl(template.replace("{size}", "64"), baseUrl)
+
+        private fun resolveUrl(url: String, baseUrl: String): String = when {
+            url.startsWith("http") -> url
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("/") -> "$baseUrl$url"
+            else -> "$baseUrl/$url"
+        }
+    }

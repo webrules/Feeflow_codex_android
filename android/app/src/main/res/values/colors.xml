@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="forum_background">#F2F2F7</color>
+    <color name="forum_card">#FFFFFF</color>
+    <color name="forum_accent">#007AFF</color>
+    <color name="forum_accent_soft">#E8F1FF</color>
+    <color name="forum_text_primary">#000000</color>
+    <color name="forum_text_secondary">#8E8E93</color>
+    <color name="forum_input_background">#E5E5EA</color>
+    <color name="forum_separator">#D7D7DD</color>
+    <color name="forum_accent_dark">#2D62ED</color>
+    <color name="forum_background_dark">#0B101B</color>
+    <color name="forum_card_dark">#151C2C</color>
+    <color name="forum_accent_soft_dark">#203A78</color>
+    <color name="forum_text_secondary_dark">#949BA5</color>
+    <color name="forum_input_background_dark">#1C2436</color>
+    <color name="forum_separator_dark">#273247</color>
+</resources>

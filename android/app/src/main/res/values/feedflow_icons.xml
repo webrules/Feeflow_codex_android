@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feedflow_icon_add" translatable="false">plus</string>
+    <string name="feedflow_icon_add_circle" translatable="false">plus.circle.fill</string>
+    <string name="feedflow_icon_ai" translatable="false">sparkles</string>
+    <string name="feedflow_icon_back" translatable="false">chevron.left</string>
+    <string name="feedflow_icon_bookmark" translatable="false">bookmark</string>
+    <string name="feedflow_icon_bookmark_fill" translatable="false">bookmark.fill</string>
+    <string name="feedflow_icon_browser" translatable="false">safari.fill</string>
+    <string name="feedflow_icon_close" translatable="false">xmark.circle.fill</string>
+    <string name="feedflow_icon_comments" translatable="false">bubble.left.and.bubble.right.fill</string>
+    <string name="feedflow_icon_communities" translatable="false">square.grid.2x2.fill</string>
+    <string name="feedflow_icon_compose" translatable="false">square.and.pencil</string>
+    <string name="feedflow_icon_feed" translatable="false">dot.radiowaves.left.and.right</string>
+    <string name="feedflow_icon_feed_manager" translatable="false">list.bullet.rectangle.portrait.fill</string>
+    <string name="feedflow_icon_forward" translatable="false">chevron.right</string>
+    <string name="feedflow_icon_home" translatable="false">house.fill</string>
+    <string name="feedflow_icon_import_file" translatable="false">tray.and.arrow.down.fill</string>
+    <string name="feedflow_icon_link" translatable="false">link.circle.fill</string>
+    <string name="feedflow_icon_login" translatable="false">person.fill</string>
+    <string name="feedflow_icon_more" translatable="false">ellipsis.circle.fill</string>
+    <string name="feedflow_icon_refresh" translatable="false">arrow.triangle.2.circlepath</string>
+    <string name="feedflow_icon_settings" translatable="false">slider.horizontal.3</string>
+    <string name="feedflow_icon_share" translatable="false">square.and.arrow.up</string>
+    <string name="feedflow_icon_summary" translatable="false">sparkles.rectangle.stack.fill</string>
+    <string name="feedflow_icon_theme" translatable="false">circle.lefthalf.filled</string>
+    <string name="feedflow_icon_trash" translatable="false">trash.fill</string>
+    <string name="feedflow_icon_upload" translatable="false">paperplane.fill</string>
+    <string name="feedflow_icon_web" translatable="false">globe</string>
+</resources>
