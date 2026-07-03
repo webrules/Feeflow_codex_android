@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -938,10 +939,12 @@ private fun ThreadDetailScreen(
     var actionError by remember(thread.id) { mutableStateOf<String?>(null) }
     var showingDeleteConfirmation by remember(thread.id) { mutableStateOf(false) }
     var postedReplies by remember(thread.id) { mutableStateOf(emptyList<Comment>()) }
+    val detailListState = rememberLazyListState()
     val justNow = stringResource(R.string.just_now)
     val saidLabel = stringResource(R.string.said)
     val renderedComments = comments + postedReplies
     LaunchedEffect(thread.id) { ttsController.stop(); speech = speech.stop() }
+    LaunchedEffect(thread.id) { detailListState.scrollToItem(0) }
     fun toggleSpeech() {
         speech = if (speech.isSpeaking) {
             ttsController.stop()
@@ -1089,7 +1092,11 @@ private fun ThreadDetailScreen(
         }
         ForumBackground(Modifier.padding(padding)) {
             Box(Modifier.fillMaxSize()) {
-                LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LazyColumn(
+                    state = detailListState,
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                     item { FeedflowProgressLine(isLoading) }
                     warning?.let {
                         item { WarningCard(if (loadedFromCache) stringResource(R.string.showing_cached_thread, it) else it) }
