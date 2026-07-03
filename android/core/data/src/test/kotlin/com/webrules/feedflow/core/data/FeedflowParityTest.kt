@@ -442,11 +442,14 @@ class PerSiteServiceParityTest {
         assertEquals("person.circle", service.avatarUrlForUid("not-a-number"))
         val typeHtml = """<select name="typeid"><option value="0">选择分类</option><option value="123">[大杂烩]</option></select>"""
         assertEquals("123", service.extractFirstTypeId(typeHtml))
+        assertNull(service.extractFirstTypeId("""<select name="sort"><option value="999">Wrong field</option></select>"""))
         assertNull(service.extractFirstTypeId("<form></form>"))
         assertEquals("74407801", service.parseFirstPostId("""<em id="authorposton74407801">发表于</em>"""))
+        assertEquals("74407802", service.parseFirstPostId("""<a href="post.php?reppost=74407802">reply</a>"""))
         assertEquals("Webrules", FourD4YService.parseLoggedInUsername("<div>欢迎您回来，<strong>Webrules</strong> <a href='logout'>退出</a></div>"))
         val store = InMemoryFeedflowStore()
         store.saveSetting("detected_4d4y_username", "Webrules")
+        assertEquals("Webrules", FourD4YService(store).currentUsername)
         assertTrue(FourD4YService(store).canDeleteThread(thread(author = User("u", "Webrules", ""))))
         assertFalse(FourD4YService(store).canDeleteThread(thread(author = User("u", "someoneElse", ""))))
     }

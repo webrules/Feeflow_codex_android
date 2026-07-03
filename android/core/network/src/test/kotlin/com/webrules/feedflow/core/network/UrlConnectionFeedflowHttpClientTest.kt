@@ -36,6 +36,22 @@ class UrlConnectionFeedflowHttpClientTest {
         assertTrue(response.contains("中文"))
     }
 
+    @Test fun cookieHeaderMatchesIosPathDomainExpiryAndNamePrecedence() {
+        val now = 1_000L
+        val cookies = listOf(
+            FeedflowCookie("sid", "root", ".4d4y.com", "/", null),
+            FeedflowCookie("sid", "forum", "www.4d4y.com", "/forum", null),
+            FeedflowCookie("auth", "valid", "4d4y.com", "/", 2_000L),
+            FeedflowCookie("expired", "no", "4d4y.com", "/", 999L),
+            FeedflowCookie("foreign", "no", "example.com", "/", null),
+        )
+
+        assertEquals(
+            "sid=forum; auth=valid",
+            CookieMatcher.matchingCookieHeader("https://www.4d4y.com/forum/index.php", cookies, now),
+        )
+    }
+
     @Test fun postWritesFormBodyAndThrowsForHttpErrors() = runBlocking {
         server.createContext("/post") { exchange ->
             val body = exchange.requestBody.bufferedReader().readText()

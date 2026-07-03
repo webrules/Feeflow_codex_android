@@ -9,6 +9,8 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SourceServiceWiringTest {
@@ -139,7 +141,7 @@ class SourceServiceWiringTest {
                 <a href="space.php?uid=123">alice</a><em>发表于 1h</em>
                 <input type="hidden" name="formhash" value="abcd1234">
                 <div id="authorposton456"></div>
-                <div class="detailcon">Original<br>post<div class="t_attach">download.bin</div><ignore_js_op>ignored attachment</ignore_js_op><img src="https://cdn.example.com/a.jpg"><img src="/images/common/back.gif"><a href="https://example.com">Example</a></div>
+                <div class="detailcon" id="pid456">Original<br>post<div class="t_attach">download.bin</div><ignore_js_op>ignored attachment</ignore_js_op><img src="https://cdn.example.com/a.jpg"><img src="/images/common/back.gif"><a href="https://example.com">Example</a></div>
                 <li id="pid456">
                   <a href="space.php?uid=456">bob</a>/ 30m</div>
                   <div class="replycon">Reply<br>content<img src="https://cdn.example.com/r.png"></div>
@@ -167,7 +169,7 @@ class SourceServiceWiringTest {
             """,
             "https://www.4d4y.com/forum/post.php?action=newthread&fid=7&sid=SID123" to """
                 <input type="hidden" name="formhash" value="efgh5678">
-                <select><option value="0">None</option><option value="12">Type</option></select>
+                <select name="typeid"><option value="0">None</option><option value="12">Type</option></select>
             """,
         )
         val service = FourD4YService(
@@ -207,6 +209,9 @@ class SourceServiceWiringTest {
         assertTrue(httpClient.lastPostBody.contains("wysiwyg=1"))
         assertTrue(httpClient.lastPostBody.contains("noticeauthor=&noticetrimstr=&noticeauthormsg="))
         assertTrue(httpClient.lastPostBody.contains("subject=&message=Reply+body&replysubmit=yes&inajax=1"))
+        assertEquals("XMLHttpRequest", httpClient.lastPostHeaders["X-Requested-With"])
+        assertEquals("https://www.4d4y.com", httpClient.lastPostHeaders["Origin"])
+        assertEquals("GB18030", httpClient.lastForcedCharset)
         service.createThread("7", "Title body", "Thread body")
         assertEquals("https://www.4d4y.com/forum/post.php?action=newthread&fid=7&extra=&topicsubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
         assertTrue(httpClient.lastPostBody.contains("formhash=efgh5678"))
@@ -216,6 +221,23 @@ class SourceServiceWiringTest {
         assertEquals("https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&editsubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
         assertEquals("formhash=ijkl9012&delete=1&editsubmit=yes&inajax=1", httpClient.lastPostBody)
         assertEquals("auth=token; sid=SID123", httpClient.lastCookieHeader)
+    }
+
+    @Test fun fourD4YMutationTreatsDiscuzAjaxErrorsAsAuthenticationFailures() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
+        val client = SourceFixtureHttpClient(
+            "https://www.4d4y.com/forum/viewthread.php?tid=99" to
+                """<input type="hidden" name="formhash" value="abcd1234">""",
+        ).apply {
+            postResponse = "<root><![CDATA[ajaxerror: 请先登录]]></root>"
+        }
+        val service = FourD4YService(store, client)
+
+        assertFailsWith<FeedflowError.AuthRequired> {
+            service.postComment("99", "7", "Reply")
+        }
+        Unit
     }
 
     @Test fun fourD4YLoginSessionShowsProtectedCategoriesAndPersistsSid() = runBlocking {
@@ -251,6 +273,39 @@ class SourceServiceWiringTest {
         assertEquals("abc123xyz", store.getSetting("4d4y_sid"))
         val threads = service.fetchCategoryThreads("2", categories, 1)
         assertEquals("Protected topic", threads.single().title)
+    }
+
+    @Test fun fourD4YRestoreRejectsGuestPageEvenWhenSeveralForumsAreVisible() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "stale", "4d4y.com", expiresAtMillis = null)))
+        val service = FourD4YService(
+            store,
+            SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/index.php" to """
+                    <a href="forumdisplay.php?fid=7">Public one</a>
+                    <a href="forumdisplay.php?fid=8">Public two</a>
+                    <a href="logging.php?action=login">登录</a>
+                """,
+            ),
+        )
+
+        assertFalse(service.restoreSession())
+    }
+
+    @Test fun fourD4YRejectsUnparseableDetailAndDefaultsParsedDetailsToOnePage() {
+        val service = FourD4YService()
+        assertNull(service.parseThreadDetailHtml("<html><title>Login</title></html>", "1", 1))
+        val parsed = service.parseThreadDetailHtml(
+            """
+                <title>One page topic - 4D4Y</title>
+                <a href="forumdisplay.php?fid=2">Discovery</a>
+                <a href="space.php?uid=10">alice</a><em id="authorposton11">发表于 now</em>
+                <div class="detailcon" id="pid11">Body</div>
+            """,
+            "1",
+            1,
+        )
+        assertEquals(1, parsed?.third)
     }
 
     @Test fun fourD4YAuthenticatedCategoriesIncludeMemberOnlyCategoryAndFallbackThreads() = runBlocking {
@@ -405,6 +460,7 @@ class SourceServiceWiringTest {
                   <table>
                     <tr>
                       <td class="postauthor">
+                        <img class="avatar" src="data/avatar/000/00/01/11_avatar_middle.jpg">
                         <div class="postinfo"><a href="space.php?uid=111">alice</a></div>
                       </td>
                       <td class="t_msgfont" id="postmessage_501">
@@ -437,6 +493,10 @@ class SourceServiceWiringTest {
         assertEquals("35", detail.thread.community.id)
         assertEquals("111", detail.thread.author.id)
         assertEquals("alice", detail.thread.author.username)
+        assertEquals(
+            "https://img02.4d4y.com/forum/uc_server/data/avatar/000/00/01/11_avatar_middle.jpg",
+            detail.thread.author.avatar,
+        )
         assertTrue(detail.thread.content.contains("Original desktop"))
         assertTrue(detail.thread.content.contains("[IMAGE:https://cdn.example.com/original.jpg]"))
         assertEquals(1, detail.thread.commentCount)
@@ -533,6 +593,9 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
     var lastPostBody: String = ""
     var lastCookieHeader: String = ""
     var lastContentType: String = ""
+    var lastPostHeaders: Map<String, String> = emptyMap()
+    var lastForcedCharset: String? = null
+    var postResponse: String = "<root><![CDATA[succeed]]></root>"
 
     override suspend fun get(url: String, cookies: List<FeedflowCookie>): String {
         lastGetUrl = url
@@ -547,7 +610,20 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
         lastPostBody = body
         lastCookieHeader = cookies.joinToString("; ") { "${it.name}=${it.value}" }
         lastContentType = contentType
-        return "ok"
+        return postResponse
+    }
+
+    override suspend fun post(
+        url: String,
+        body: String,
+        cookies: List<FeedflowCookie>,
+        contentType: String,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String {
+        lastPostHeaders = headers
+        lastForcedCharset = forcedCharset
+        return post(url, body, cookies, contentType)
     }
 }
 

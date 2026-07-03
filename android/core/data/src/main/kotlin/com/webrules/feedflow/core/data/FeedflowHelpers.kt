@@ -42,11 +42,16 @@ data class SiteLoginConfig(
     val authCookieNameFragments: List<String> = emptyList(),
     val oauthOptions: List<OAuthOption> = emptyList(),
 ) {
-    fun hasAuthenticatedSession(cookies: List<FeedflowCookie>): Boolean =
-        siteCookies(cookies).any { cookie ->
+    fun hasAuthenticatedSession(
+        cookies: List<FeedflowCookie>,
+        nowMillis: Long = System.currentTimeMillis(),
+    ): Boolean {
+        return siteCookies(cookies).any { cookie ->
+            if (cookie.value.isBlank() || cookie.expiresAtMillis?.let { it < nowMillis } == true) return@any false
             requiredCookieName?.let { cookie.name == it } == true ||
                 authCookieNameFragments.any { fragment -> cookie.name.contains(fragment, ignoreCase = true) }
         }
+    }
 
     fun siteCookies(cookies: List<FeedflowCookie>): List<FeedflowCookie> =
         cookies.filter { it.domain.lowercase().trimStart('.').endsWith(cookieDomain) }
@@ -550,10 +555,9 @@ object HackerNewsContentCleaner {
                     val title = Regex("""href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=\d+[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                         .find(row)?.groupValues?.get(1)?.cleanThreadListTitle() ?: return@mapNotNull null
                     val author = extractThreadListAuthor(row)
-                    val authorId = author?.groupValues?.getOrNull(1).orEmpty()
-                    val authorName = author?.groupValues?.getOrNull(2)?.stripTags()?.decodeHtmlEntities()?.trim()?.ifBlank { null } ?: "Unknown"
-                    val replies = Regex("""<td[^>]*class=["'][^"']*nums[^"']*["'][^>]*>.*?<strong>\s*(\d+)\s*</strong>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                        .find(row)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    val authorId = author?.first.orEmpty()
+                    val authorName = author?.second ?: "Unknown"
+                    val replies = extractThreadListReplyCount(row)
                     FeedThread(
                         id = tid,
                         title = title,
@@ -561,7 +565,7 @@ object HackerNewsContentCleaner {
                         author = User(
                             id = authorId,
                             username = authorName,
-                            avatar = if (authorId.isNotBlank()) avatarUrlForUid(authorId) else "person.circle",
+                            avatar = extractThreadListAvatar(row, authorId),
                         ),
                         community = community,
                         timeAgo = "",
@@ -609,14 +613,9 @@ object HackerNewsContentCleaner {
                     if (title.isBlank()) return@mapNotNull null
                     val context = html.surroundingThreadListBlock(match.range)
                     val author = extractThreadListAuthor(context)
-                    val authorId = author?.groupValues?.getOrNull(1).orEmpty()
-                    val authorName = author?.groupValues?.getOrNull(2)?.stripTags()?.decodeHtmlEntities()?.trim()?.ifBlank { null } ?: "Unknown"
-                    val replies = Regex("""<td[^>]*class=["'][^"']*nums[^"']*["'][^>]*>.*?<strong>\s*(\d+)\s*</strong>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                        .find(context)
-                        ?.groupValues
-                        ?.get(1)
-                        ?.toIntOrNull()
-                        ?: 0
+                    val authorId = author?.first.orEmpty()
+                    val authorName = author?.second ?: "Unknown"
+                    val replies = extractThreadListReplyCount(context)
                     FeedThread(
                         id = tid,
                         title = title,
@@ -624,7 +623,7 @@ object HackerNewsContentCleaner {
                         author = User(
                             id = authorId,
                             username = authorName,
-                            avatar = if (authorId.isNotBlank()) avatarUrlForUid(authorId) else "person.circle",
+                            avatar = extractThreadListAvatar(context, authorId),
                         ),
                         community = community,
                         timeAgo = extractThreadListCreatedTime(context),
@@ -643,9 +642,52 @@ object HackerNewsContentCleaner {
                 .replace(Regex("""\s+"""), " ")
                 .trim()
 
-        private fun extractThreadListAuthor(context: String): MatchResult? =
-            Regex("""space\.php\?uid=(\d+)[^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                .find(context)
+        private fun extractThreadListAuthor(context: String): Pair<String, String>? {
+            val uidMatch = Regex(
+                """space\.php\?uid=(\d+)[^>]*>(.*?)</a>""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).find(context)
+            if (uidMatch != null) {
+                val name = uidMatch.groupValues[2].stripTags().decodeHtmlEntities().trim()
+                if (name.isNotBlank()) return uidMatch.groupValues[1] to name
+            }
+            val name = listOf(
+                """class=["'][^"']*author[^"']*["'][^>]*>\s*<a[^>]*>([^<]+)</a>""",
+                """class=["'][^"']*by[^"']*["'][^>]*>\s*<a[^>]*>([^<]+)</a>""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    .find(context)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.stripTags()
+                    ?.decodeHtmlEntities()
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+            }
+            return name?.let { "" to it }
+        }
+
+        private fun extractThreadListAvatar(context: String, uid: String): String {
+            val raw = listOf(
+                """<img[^>]+class=["'][^"']*avatar[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']""",
+                """<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]+class=["'][^"']*avatar[^"']*["']""",
+                """<img[^>]+(?:src|data-src|file)=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, RegexOption.IGNORE_CASE).find(context)?.groupValues?.get(1)
+            }
+            if (raw != null) {
+                val value = raw.decodeHtmlEntities().trim()
+                return when {
+                    value.startsWith("//") -> "https:$value"
+                    value.startsWith("http") -> value
+                    value.startsWith("/") -> "https://www.4d4y.com$value"
+                    value.startsWith("uc_server/") -> "https://www.4d4y.com/$value"
+                    value.startsWith("data/avatar/") -> "https://img02.4d4y.com/forum/uc_server/$value"
+                    else -> "https://www.4d4y.com/forum/$value"
+                }
+            }
+            return if (uid.isNotBlank()) avatarUrlForUid(uid) else "person.circle"
+        }
 
         private fun String.surroundingThreadListBlock(range: IntRange): String {
             val before = substring(0, range.first.coerceIn(0, length))
@@ -663,18 +705,46 @@ object HackerNewsContentCleaner {
         }
 
         private fun extractThreadListCreatedTime(context: String): String =
-            Regex("""<em>\s*([^<]*\d{1,2}[-/.]\d{1,2}[^<]*)</em>""", RegexOption.IGNORE_CASE)
-                .find(context)
-                ?.groupValues
-                ?.get(1)
-                ?.stripTags()
-                ?.decodeHtmlEntities()
-                ?.trim()
-                .orEmpty()
+            listOf(
+                """<p>\s*<a[^>]+href=["']space\.php\?uid=\d+[^"']*["'][^>]*>[^<]+</a>\s*/\s*([^<]+)</p>""",
+                """((?:昨天|前天|\d+\s*(?:分钟前|小时前|天前)))""",
+                """<em>\s*([^<]*\d{1,2}[-/.]\d{1,2}[^<]*)</em>""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    .find(context)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.stripTags()
+                    ?.decodeHtmlEntities()
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+            }.orEmpty()
 
-        private fun extractThreadListLastPostTime(context: String): String? =
-            extractThreadListLastPostBlock(context)?.let { block ->
-                Regex("""<cite[^>]*>([\s\S]*?)</cite>""", RegexOption.IGNORE_CASE)
+        private fun extractThreadListReplyCount(context: String): Int =
+            listOf(
+                """<td[^>]*class=["'][^"']*nums[^"']*["'][^>]*>.*?<strong>\s*(\d+)\s*</strong>""",
+                """<a[^>]+class=["'][^"']*num[^"']*["'][^>]*>\s*(\d+)\s*</a>""",
+                """(?:回复|回覆|回帖|repl(?:y|ies))[^0-9]{0,12}(\d+)""",
+                """<strong>\s*(\d+)\s*</strong>""",
+                """class=["'][^"']*(?:reply|num|count)[^"']*["'][^>]*>\s*(\d+)""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    .find(context)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toIntOrNull()
+            } ?: 0
+
+        private fun extractThreadListLastPostTime(context: String): String? {
+            val block = extractThreadListLastPostBlock(context) ?: context
+            return listOf(
+                """redirect\.php\?tid=\d+[^"']*goto=lastpost[^"']*["'][^>]*>([^<]+)</a>""",
+                """(\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})""",
+                """(\d{1,2}:\d{2})""",
+                """((?:昨天|前天|\d+\s*(?:分钟前|小时前|天前)))""",
+                """<cite[^>]*>([\s\S]*?)</cite>""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                     .find(block)
                     ?.groupValues
                     ?.get(1)
@@ -683,17 +753,25 @@ object HackerNewsContentCleaner {
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
             }
+        }
 
-        private fun extractThreadListLastPoster(context: String): String? =
-            extractThreadListLastPostBlock(context)?.let { block ->
-                Regex("""<em[^>]*>[\s\S]*?<a[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
+        private fun extractThreadListLastPoster(context: String): String? {
+            val block = extractThreadListLastPostBlock(context) ?: context
+            return listOf(
+                """space\.php\?username=[^"']+["'][^>]*>([^<]+)</a>\s*/\s*<a[^>]+href=["']redirect\.php\?tid=\d+[^"']*goto=lastpost""",
+                """<em[^>]*>[\s\S]*?<a[^>]*>([^<]+)</a>""",
+                """lastpost[^>]*>.*?<a[^>]*>([^<]+)</a>""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                     .find(block)
                     ?.groupValues
                     ?.get(1)
+                    ?.stripTags()
                     ?.decodeHtmlEntities()
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
             }
+        }
 
         private fun extractThreadListLastPostBlock(context: String): String? =
             Regex("""<td[^>]*class=["'][^"']*lastpost[^"']*["'][^>]*>([\s\S]*?)(?:</td>|</tr>|</li>|$)""", RegexOption.IGNORE_CASE)
