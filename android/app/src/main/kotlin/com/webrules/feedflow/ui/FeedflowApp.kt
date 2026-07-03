@@ -379,9 +379,11 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 communities = content.value,
                 isLoading = content.isLoading,
                 warning = content.warning,
+                loginRequired = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
                 onBack = { route = FeedflowRoute.SiteList },
                 onHome = { route = FeedflowRoute.SiteList },
                 onRefresh = { refreshToken += 1 },
+                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site) },
                 onDailySummary = { route = FeedflowRoute.DailyRssSummary },
                 onFeedManager = { route = FeedflowRoute.RssManager },
                 onCommunityClick = { route = FeedflowRoute.Threads(current.site, it) },
@@ -425,6 +427,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
+                loginRequired = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
                 onBack = { route = FeedflowRoute.Communities(current.site) },
                 onHome = { route = FeedflowRoute.SiteList },
                 onThreadClick = { route = FeedflowRoute.Detail(current.site, it, visibleThreads) },
@@ -432,6 +435,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onRefresh = {
                     refreshToken += 1
                 },
+                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site) },
                 onTheme = {
                     darkTheme = !darkTheme
                     store.saveSetting(DarkThemeSettingKey, darkTheme.toString())
@@ -745,9 +749,11 @@ private fun CommunitiesScreen(
     communities: List<Community>,
     isLoading: Boolean,
     warning: String?,
+    loginRequired: Boolean,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onRefresh: () -> Unit,
+    onLoginRequired: () -> Unit,
     onDailySummary: () -> Unit,
     onFeedManager: () -> Unit,
     onCommunityClick: (Community) -> Unit,
@@ -777,6 +783,9 @@ private fun CommunitiesScreen(
                 warning?.let {
                     item { WarningCard(it) }
                 }
+                if (loginRequired) {
+                    item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
+                }
                 item { HeaderCard(site.displayName, "Browse communities and categories", site) }
                 items(communities) { community ->
                     CommunityRow(community = community, onClick = { onCommunityClick(community) })
@@ -794,11 +803,13 @@ private fun ThreadListScreen(
     isLoading: Boolean,
     warning: String?,
     loadedFromCache: Boolean,
+    loginRequired: Boolean,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onThreadClick: (FeedThread) -> Unit,
     onNewThread: () -> Unit,
     onRefresh: () -> Unit,
+    onLoginRequired: () -> Unit,
     onTheme: () -> Unit,
     canLoadMore: Boolean,
     isLoadingMore: Boolean,
@@ -836,6 +847,9 @@ private fun ThreadListScreen(
                             },
                         )
                     }
+                }
+                if (loginRequired) {
+                    item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
                 }
                 item {
                     ThreadListStatusHeader(
@@ -2817,6 +2831,28 @@ private fun WarningCard(message: String) {
     ForumCard {
         Text(stringResource(R.string.offline_cache), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
         Text(message, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun LoginRequiredCard(site: ForumSite, onLogin: () -> Unit) {
+    ForumCard(contentAlignment = Alignment.CenterHorizontally) {
+        Icon(
+            Icons.Default.Login,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(32.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.login_required_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(R.string.login_required_page_detail, site.displayName),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(10.dp))
+        Button(onClick = onLogin) { Text(stringResource(R.string.web_login)) }
     }
 }
 

@@ -121,6 +121,8 @@
     <string name="failed_summary_short">摘要失败</string>
     <string name="search_results">搜索结果</string>
     <string name="login_required_search">搜索 %1$s 需要登录。</string>
+    <string name="login_required_title">需要登录</string>
+    <string name="login_required_page_detail">登录 %1$s 后可加载受保护的分类和主题。</string>
     <string name="no_results_found">未找到结果。</string>
     <string name="saving">保存中</string>
     <string name="saved">已保存</string>

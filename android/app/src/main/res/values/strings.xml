@@ -121,6 +121,8 @@
     <string name="failed_summary_short">Failed summary</string>
     <string name="search_results">Search results</string>
     <string name="login_required_search">Login is required to search %1$s.</string>
+    <string name="login_required_title">Login required</string>
+    <string name="login_required_page_detail">Sign in to %1$s to load protected categories and threads.</string>
     <string name="no_results_found">No results found.</string>
     <string name="saving">Saving</string>
     <string name="saved">Saved</string>
