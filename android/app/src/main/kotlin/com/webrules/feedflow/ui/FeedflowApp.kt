@@ -786,7 +786,6 @@ private fun CommunitiesScreen(
                 if (loginRequired) {
                     item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
                 }
-                item { HeaderCard(site.displayName, "Browse communities and categories", site) }
                 items(communities) { community ->
                     CommunityRow(community = community, onClick = { onCommunityClick(community) })
                 }
@@ -851,17 +850,21 @@ private fun ThreadListScreen(
                 if (loginRequired) {
                     item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
                 }
-                item {
-                    ThreadListStatusHeader(
-                        site = site,
-                        community = community,
-                        visibleCount = threads.size,
-                        isRefreshing = isLoading,
-                    )
-                }
-                if (threads.isEmpty()) {
+                if (isLoading && threads.isEmpty()) {
+                    item { ThreadListLoadingView(site = site, community = community) }
+                } else {
                     item {
-                        ThreadListEmptyView(site = site, community = community, onRefresh = onRefresh)
+                        ThreadListStatusHeader(
+                            site = site,
+                            community = community,
+                            visibleCount = threads.size,
+                            isRefreshing = isLoading,
+                        )
+                    }
+                    if (threads.isEmpty()) {
+                        item {
+                            ThreadListEmptyView(site = site, community = community, onRefresh = onRefresh)
+                        }
                     }
                 }
                 items(threads) { thread ->
@@ -2506,6 +2509,33 @@ private fun ThreadListStatusHeader(site: ForumSite, community: Community, visibl
                     else -> ThreadStateChip(text = stringResource(R.string.public_source), color = Color(0xFF7E57C2))
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ThreadListLoadingView(site: ForumSite, community: Community) {
+    Box(Modifier.fillMaxWidth().padding(top = 56.dp), contentAlignment = Alignment.Center) {
+        ForumCard(
+            modifier = Modifier.width(280.dp),
+            contentPadding = PaddingValues(24.dp),
+            contentAlignment = Alignment.CenterHorizontally,
+        ) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Spacer(Modifier.height(14.dp))
+            Text(
+                stringResource(R.string.loading_community_format, community.name),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                stringResource(R.string.checking_source_threads_format, site.displayName),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
