@@ -116,6 +116,12 @@ class FeedflowAppStateController(
     suspend fun deleteThread(site: ForumSite, thread: FeedThread): FeedflowError? =
         repository.deleteThread(site, thread)
 
+    suspend fun markThreadRead(site: ForumSite, thread: FeedThread): FeedflowError? =
+        repository.markThreadRead(site, thread)
+
+    suspend fun markThreadNotInterested(site: ForumSite, thread: FeedThread): FeedflowError? =
+        repository.markThreadNotInterested(site, thread)
+
     suspend fun summarizeThread(
         apiKey: String,
         site: ForumSite,

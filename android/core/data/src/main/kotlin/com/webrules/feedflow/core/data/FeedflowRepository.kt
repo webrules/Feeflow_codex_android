@@ -167,6 +167,26 @@ class FeedflowRepository(
             onFailure = { it.toFeedflowError(site.serviceId, "deleteThread") },
         )
 
+    suspend fun markThreadRead(site: ForumSite, thread: FeedThread): FeedflowError? =
+        runCatching {
+            withContext(Dispatchers.IO) {
+                serviceFactory(site).markThreadRead(thread)
+            }
+        }.fold(
+            onSuccess = { null },
+            onFailure = { it.toFeedflowError(site.serviceId, "markThreadRead") },
+        )
+
+    suspend fun markThreadNotInterested(site: ForumSite, thread: FeedThread): FeedflowError? =
+        runCatching {
+            withContext(Dispatchers.IO) {
+                serviceFactory(site).markThreadNotInterested(thread)
+            }
+        }.fold(
+            onSuccess = { null },
+            onFailure = { it.toFeedflowError(site.serviceId, "markThreadNotInterested") },
+        )
+
     suspend fun summarizeThread(
         apiKey: String,
         site: ForumSite,

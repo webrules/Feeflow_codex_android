@@ -310,6 +310,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     val networkStatus by produceState(initialValue = networkMonitor.current(), networkMonitor) {
         networkMonitor.statusFlow().collect { value = it }
     }
+    val appScope = rememberCoroutineScope()
     var route by remember { mutableStateOf<FeedflowRoute>(FeedflowRoute.SiteList) }
     var homeState by remember { mutableStateOf(appStateController.homeState) }
     var bookmarkRevision by remember { mutableStateOf(0) }
@@ -383,7 +384,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             val filteredPostIds = remember(filterRevision, current.site) {
                 store.getFilteredPostIds(current.site.serviceId)
             }
-            val visibleThreads = content.value.filterNot { thread -> filteredPostIds.contains(thread.id) }
+            val visibleThreads = content.value.filterNot { thread ->
+                filteredPostIds.contains(thread.id) || filteredPostIds.contains(thread.id.substringAfter("_", thread.id))
+            }
             ThreadListScreen(
                 site = current.site,
                 community = current.community,
@@ -399,8 +402,12 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                     refreshToken += 1
                 },
                 onNotInterested = { thread ->
-                    store.addFilteredPost(thread.id, current.site.serviceId)
-                    filterRevision += 1
+                    appScope.launch {
+                        val error = appStateController.markThreadNotInterested(current.site, thread)
+                        if (error == null) {
+                            filterRevision += 1
+                        }
+                    }
                 },
             )
         }
@@ -415,6 +422,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             var canLoadMore by remember(current.site, activeThread.id) { mutableStateOf(false) }
             LaunchedEffect(current.site, activeThread.id, refreshToken) {
                 content = content.copy(isLoading = true)
+                if (current.site == ForumSite.Zhihu && activeThread.community.id == "recommend") {
+                    appStateController.markThreadRead(current.site, activeThread)
+                    filterRevision += 1
+                }
                 content = appStateController.refreshDetail(current.site, activeThread)
                 extraComments = emptyList()
                 commentPage = 1

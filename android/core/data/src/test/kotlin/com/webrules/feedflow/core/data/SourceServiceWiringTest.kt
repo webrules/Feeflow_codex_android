@@ -195,6 +195,35 @@ class SourceServiceWiringTest {
         assertEquals("Reader", detail.comments.single().author.username)
     }
 
+    @Test fun zhihuServiceMarksRecommendationsReadAndSendsNotInterestedPayload() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("zhihu", listOf(FeedflowCookie("z_c0", "token", "zhihu.com", expiresAtMillis = null)))
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10" to
+                """{"data":[
+                    {"type":"feed","target":{"type":"answer","id":456,"excerpt":"Read body","voteup_count":20,"comment_count":1,"question":{"title":"Read item"},"author":{"name":"Reader"}}},
+                    {"type":"feed","target":{"type":"article","id":789,"title":"Visible item","excerpt":"Visible body","voteup_count":30,"comment_count":2,"author":{"name":"Writer","follower_count":100}}}
+                ]}""",
+        )
+        val service = ZhihuService(httpClient, store)
+        val categories = service.fetchCategories()
+        val firstLoad = service.fetchCategoryThreads("recommend", categories, 1)
+        assertEquals(listOf("answer_456", "article_789"), firstLoad.map { it.id })
+
+        service.markThreadRead(firstLoad.first())
+        assertTrue(store.isPostFiltered("456", "zhihu"))
+        assertEquals(listOf("article_789"), service.fetchCategoryThreads("recommend", categories, 1).map { it.id })
+
+        service.markThreadNotInterested(firstLoad.last())
+        assertTrue(store.isPostFiltered("789", "zhihu"))
+        assertTrue(store.isPostFiltered("article_789", "zhihu"))
+        assertEquals("https://www.zhihu.com/api/v3/feed/topstory/uninterest", httpClient.lastPostUrl)
+        assertEquals("""{"target_type":"article","target_id":"789","reason":"not_interested"}""", httpClient.lastPostBody)
+        assertEquals("application/json; charset=UTF-8", httpClient.lastContentType)
+        assertEquals("z_c0=token", httpClient.lastCookieHeader)
+        assertEquals("789", store.getSetting("zhihu_downvoted_ids"))
+    }
+
     private fun sampleThread(id: String) = com.webrules.feedflow.core.model.FeedThread(
         id = id,
         title = "Title",
@@ -211,6 +240,7 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
     var lastPostUrl: String = ""
     var lastPostBody: String = ""
     var lastCookieHeader: String = ""
+    var lastContentType: String = ""
 
     override suspend fun get(url: String, cookies: List<FeedflowCookie>): String =
         fixtures.firstOrNull { (fixtureUrl, _) -> fixtureUrl == url }?.second ?: error("Missing fixture for $url")
@@ -219,6 +249,7 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
         lastPostUrl = url
         lastPostBody = body
         lastCookieHeader = cookies.joinToString("; ") { "${it.name}=${it.value}" }
+        lastContentType = contentType
         return "ok"
     }
 }

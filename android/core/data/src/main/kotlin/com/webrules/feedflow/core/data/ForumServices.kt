@@ -66,6 +66,9 @@ interface ForumService {
     fun canDeleteThread(thread: FeedThread): Boolean = false
     suspend fun deleteThread(threadId: String, categoryId: String): Unit =
         throw FeedflowError.UnsupportedFeature("deleteThread")
+    suspend fun markThreadRead(thread: FeedThread): Unit = Unit
+    suspend fun markThreadNotInterested(thread: FeedThread): Unit =
+        throw FeedflowError.UnsupportedFeature("markThreadNotInterested")
     suspend fun searchThreads(query: String, page: Int): SearchResult = SearchResult(emptyList(), false)
     fun getWebUrl(thread: FeedThread): String
     fun canCreateThread(community: Community): Boolean = supportsThreadCreation
@@ -630,6 +633,7 @@ class ZhihuService(
     private val recommendCommunity = Community("recommend", "知乎", "", "zhihu", 0, 0)
     private val hotCommunity = Community("hot", "知乎热榜", "", "zhihu", 0, 0)
     private val questionDataCache = mutableMapOf<String, Pair<String, String>>()
+    private val downvotedSettingKey = "zhihu_downvoted_ids"
 
     private fun cookies() = store?.getCookies(id).orEmpty()
 
@@ -666,6 +670,35 @@ class ZhihuService(
             "article" -> "https://zhuanlan.zhihu.com/p/$identifier"
             "question" -> "https://www.zhihu.com/question/$identifier"
             else -> "https://www.zhihu.com"
+        }
+    }
+
+    override suspend fun markThreadRead(thread: FeedThread) {
+        if (thread.community.id != "recommend") return
+        val targetId = zhihuTargetId(thread.id) ?: return
+        store?.addFilteredPost(targetId, id)
+    }
+
+    override suspend fun markThreadNotInterested(thread: FeedThread) {
+        val targetId = zhihuTargetId(thread.id) ?: return
+        val targetType = thread.id.substringBefore("_", missingDelimiterValue = "")
+        if (targetType.isBlank()) return
+        val existing = store?.getSetting(downvotedSettingKey)
+            ?.split(",")
+            ?.filter { it.isNotBlank() }
+            ?.toMutableSet()
+            ?: linkedSetOf()
+        existing += targetId
+        store?.saveSetting(downvotedSettingKey, existing.joinToString(","))
+        store?.addFilteredPost(targetId, id)
+        store?.addFilteredPost(thread.id, id)
+        runCatching {
+            httpClient.post(
+                url = "https://www.zhihu.com/api/v3/feed/topstory/uninterest",
+                body = """{"target_type":"$targetType","target_id":"$targetId","reason":"not_interested"}""",
+                cookies = cookies(),
+                contentType = "application/json; charset=UTF-8",
+            )
         }
     }
 
@@ -707,6 +740,7 @@ class ZhihuService(
             val targetId = target.longId("id") ?: continue
             val threadId = "${targetType}_$targetId"
             if (!seen.add(threadId)) continue
+            if (isFilteredZhihuTarget(threadId, targetId.toString())) continue
             threads += FeedThread(
                 id = threadId,
                 title = ZhihuParser.effectiveTitle(target),
@@ -721,6 +755,16 @@ class ZhihuService(
         }
         return threads
     }
+
+    private fun isFilteredZhihuTarget(threadId: String, targetId: String): Boolean =
+        store?.isPostFiltered(threadId, id) == true ||
+            store?.isPostFiltered(targetId, id) == true ||
+            store?.getSetting(downvotedSettingKey)
+                ?.split(",")
+                ?.any { it == targetId } == true
+
+    private fun zhihuTargetId(threadId: String): String? =
+        threadId.split("_", limit = 2).getOrNull(1)?.takeIf { it.isNotBlank() }
 
     private suspend fun fetchHotList(page: Int): List<FeedThread> {
         if (page > 1) return emptyList()
