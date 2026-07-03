@@ -69,6 +69,23 @@ class FeedflowAppStateControllerTest {
         assertTrue(loaded.warning?.contains("Network failure") == true)
     }
 
+    @Test fun moreThreadsAppendsDistinctPagesAndUpdatesCache() = runBlocking {
+        val community = Community("latest", "Latest", "", "General", 0, 0)
+        val pageOne = thread("page-1", community)
+        val pageTwo = thread("page-2", community)
+        val controller = FeedflowAppStateController(
+            FeedflowRepository(
+                serviceFactory = { PagedThreadsService(mapOf(1 to listOf(pageOne), 2 to listOf(pageTwo))) },
+            ),
+        )
+
+        assertEquals(listOf(pageOne), controller.refreshThreads(ForumSite.V2ex, community).value)
+        val merged = controller.moreThreads(ForumSite.V2ex, community, page = 2)
+
+        assertEquals(listOf(pageOne, pageTwo), merged.value)
+        assertEquals(listOf(pageOne, pageTwo), controller.threads(ForumSite.V2ex, community).value)
+    }
+
     @Test fun searchDelegatesToServiceAndSurfacesResults() = runBlocking {
         val community = Community("search", "Search", "android", "General", 0, 0)
         val thread = FeedThread(
@@ -156,6 +173,15 @@ class FeedflowAppStateControllerTest {
         override fun getWebUrl(thread: FeedThread): String = thread.id
     }
 
+    private class PagedThreadsService(private val pages: Map<Int, List<FeedThread>>) : StaticForumService() {
+        override val name = "Paged"
+        override val id = "paged"
+        override val logo = "list.bullet"
+        override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> =
+            pages[page].orEmpty()
+        override fun getWebUrl(thread: FeedThread): String = thread.id
+    }
+
     private class PostingService : StaticForumService() {
         override val name = "Posting"
         override val id = "posting"
@@ -173,6 +199,18 @@ class FeedflowAppStateControllerTest {
 
         override fun getWebUrl(thread: FeedThread): String = thread.id
     }
+
+    private fun thread(id: String, community: Community): FeedThread =
+        FeedThread(
+            id = id,
+            title = id,
+            content = "",
+            author = User("u", "User", "person.circle"),
+            community = community,
+            timeAgo = "now",
+            likeCount = 0,
+            commentCount = 0,
+        )
 
     private class FailingHttpClient : com.webrules.feedflow.core.network.FeedflowHttpClient {
         override suspend fun get(url: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): String =

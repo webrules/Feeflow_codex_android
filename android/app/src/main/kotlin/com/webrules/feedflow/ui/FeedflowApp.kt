@@ -390,9 +390,15 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 mutableStateOf(appStateController.threads(current.site, current.community))
             }
             var refreshToken by remember(current.site, current.community.id) { mutableStateOf(0) }
+            var nextPage by remember(current.site, current.community.id) { mutableStateOf(2) }
+            var canLoadMoreTopics by remember(current.site, current.community.id) { mutableStateOf(false) }
+            var isLoadingMoreTopics by remember(current.site, current.community.id) { mutableStateOf(false) }
             LaunchedEffect(current.site, current.community.id, refreshToken) {
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshThreads(current.site, current.community)
+                nextPage = 2
+                canLoadMoreTopics = content.value.isNotEmpty()
+                isLoadingMoreTopics = false
             }
             LaunchedEffect(current.site, current.community.id, content.value, networkStatus, homeState.backgroundPrefetch) {
                 if (content.value.isNotEmpty()) {
@@ -423,6 +429,22 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onNewThread = { route = FeedflowRoute.NewThread(current.site, current.community) },
                 onRefresh = {
                     refreshToken += 1
+                },
+                canLoadMore = canLoadMoreTopics,
+                isLoadingMore = isLoadingMoreTopics,
+                onLoadMore = {
+                    if (!isLoadingMoreTopics && canLoadMoreTopics) {
+                        isLoadingMoreTopics = true
+                        val previousSize = content.value.size
+                        val loaded = appStateController.moreThreads(current.site, current.community, nextPage)
+                        content = loaded
+                        if (loaded.value.size <= previousSize || loaded.warning != null) {
+                            canLoadMoreTopics = false
+                        } else {
+                            nextPage += 1
+                        }
+                        isLoadingMoreTopics = false
+                    }
                 },
                 onNotInterested = { thread ->
                     appScope.launch {
@@ -766,8 +788,12 @@ private fun ThreadListScreen(
     onThreadClick: (FeedThread) -> Unit,
     onNewThread: () -> Unit,
     onRefresh: () -> Unit,
+    canLoadMore: Boolean,
+    isLoadingMore: Boolean,
+    onLoadMore: suspend () -> Unit,
     onNotInterested: (FeedThread) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     Scaffold(
         bottomBar = {
             ScreenToolbar(
@@ -819,6 +845,20 @@ private fun ThreadListScreen(
                         onClick = { onThreadClick(thread) },
                         onNotInterested = if (site == ForumSite.Zhihu) ({ onNotInterested(thread) }) else null,
                     )
+                }
+                if (threads.isNotEmpty() && canLoadMore) {
+                    item {
+                        LaunchedEffect(threads.size) {
+                            onLoadMore()
+                        }
+                        Button(
+                            enabled = !isLoadingMore,
+                            onClick = { scope.launch { onLoadMore() } },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (isLoadingMore) stringResource(R.string.loading) else stringResource(R.string.load_more_topics))
+                        }
+                    }
                 }
             }
         }

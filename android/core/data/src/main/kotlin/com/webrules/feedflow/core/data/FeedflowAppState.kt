@@ -83,6 +83,19 @@ class FeedflowAppStateController(
         ).also { threadCache[threadKey(site, community)] = it }
     }
 
+    suspend fun moreThreads(site: ForumSite, community: Community, page: Int): LoadableContent<List<FeedThread>> {
+        val result = repository.loadThreads(site, community, page)
+        val key = threadKey(site, community)
+        val current = threadCache[key]?.value.orEmpty()
+        val next = result.best.orEmpty()
+        val merged = (current + next).distinctBy { it.id }
+        return LoadableContent.loaded(
+            value = merged,
+            warning = result.warning?.message,
+            loadedFromCache = result.fresh == null && result.cached != null,
+        ).also { threadCache[key] = it }
+    }
+
     suspend fun refreshDetail(site: ForumSite, thread: FeedThread, page: Int = 1): LoadableContent<ThreadDetailContent> {
         val result = repository.loadThreadDetail(site, thread, page)
         return contentFromResult(

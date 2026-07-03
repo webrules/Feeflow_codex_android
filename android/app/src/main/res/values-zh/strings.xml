@@ -158,6 +158,7 @@
     <string name="previous_thread">上一篇</string>
     <string name="next_thread">下一篇</string>
     <string name="load_more_comments">加载更多评论</string>
+    <string name="load_more_topics">加载更多主题</string>
     <string name="loading">加载中…</string>
     <string name="share">分享</string>
     <string name="open_in_browser">在浏览器中打开</string>
