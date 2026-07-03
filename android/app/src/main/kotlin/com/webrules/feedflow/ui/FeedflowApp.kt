@@ -1130,7 +1130,7 @@ private fun LoginScreen(
                                 Icon(Icons.Default.Login, contentDescription = null)
                                 Column(Modifier.weight(1f)) {
                                    Text(stringResource(R.string.signed_out), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                   Text("${stringResource(R.string.login_to_site)} ${selectedSite.displayName}")
+                                   Text(stringResource(R.string.login_to_site_format, selectedSite.displayName))
                                 }
                                 Button(onClick = { onWebLogin(selectedSite) }) { Text(stringResource(R.string.web_login)) }
                             }
@@ -1946,7 +1946,7 @@ private fun FullScreenImageScreen(url: String, onClose: () -> Unit) {
                 modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)),
             )
             Text(
-                text = "Zoom: ${"%.1f".format(scale)}x · Rotation: $rotation°",
+                text = stringResource(R.string.image_transform_status, "%.1f".format(scale), rotation),
                 color = Color.White,
                 modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = 0.55f)).padding(8.dp),
             )
@@ -2632,7 +2632,7 @@ private fun HeaderCard(title: String, subtitle: String, site: ForumSite) {
                 Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(subtitle, style = MaterialTheme.typography.bodyMedium)
             }
-            if (site.requiresLogin) FeedflowTag("Login")
+            if (site.requiresLogin) FeedflowTag(stringResource(R.string.login_badge))
         }
     }
 }
