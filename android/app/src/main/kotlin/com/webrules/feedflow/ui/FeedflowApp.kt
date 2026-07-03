@@ -432,6 +432,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onRefresh = {
                     refreshToken += 1
                 },
+                onTheme = {
+                    darkTheme = !darkTheme
+                    store.saveSetting(DarkThemeSettingKey, darkTheme.toString())
+                },
                 canLoadMore = canLoadMoreTopics,
                 isLoadingMore = isLoadingMoreTopics,
                 onLoadMore = {
@@ -509,6 +513,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onOpenBrowser = { route = FeedflowRoute.Browser(appStateController.webUrl(current.site, content.value.thread), content.value.thread.title) },
                 onOpenImage = { url -> route = FeedflowRoute.ImageViewer(url) },
                 onRefresh = { refreshToken += 1 },
+                onTheme = {
+                    darkTheme = !darkTheme
+                    store.saveSetting(DarkThemeSettingKey, darkTheme.toString())
+                },
                 canDelete = appStateController.canDeleteThread(current.site, content.value.thread),
                 onDelete = {
                     val error = appStateController.deleteThread(current.site, content.value.thread)
@@ -790,6 +798,7 @@ private fun ThreadListScreen(
     onThreadClick: (FeedThread) -> Unit,
     onNewThread: () -> Unit,
     onRefresh: () -> Unit,
+    onTheme: () -> Unit,
     canLoadMore: Boolean,
     isLoadingMore: Boolean,
     onLoadMore: suspend () -> Unit,
@@ -805,7 +814,7 @@ private fun ThreadListScreen(
                 actions = {
                     if (site.supportsThreadCreation) CircularToolbarIcon(FeedflowIconMap.symbol("square.and.pencil"), stringResource(R.string.new_thread_action), onNewThread)
                     CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
-                    CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme)) {}
+                    CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme), onTheme)
                 },
             )
         },
@@ -888,6 +897,7 @@ private fun ThreadDetailScreen(
     onOpenBrowser: () -> Unit,
     onOpenImage: (String) -> Unit,
     onRefresh: () -> Unit,
+    onTheme: () -> Unit,
     canDelete: Boolean,
     onDelete: suspend () -> FeedflowError?,
     isBookmarked: Boolean,
@@ -1042,6 +1052,7 @@ private fun ThreadDetailScreen(
                     onSpeak = ::toggleSpeech,
                     onShare = ::shareThread,
                     onOpenExternal = ::openExternal,
+                    onTheme = onTheme,
                     onDelete = { showingDeleteConfirmation = true },
                 )
             }
@@ -2613,6 +2624,7 @@ private fun ThreadDetailActionToolbar(
     onSpeak: () -> Unit,
     onShare: () -> Unit,
     onOpenExternal: () -> Unit,
+    onTheme: () -> Unit,
     onDelete: () -> Unit,
 ) {
     ToolbarCard {
@@ -2647,6 +2659,7 @@ private fun ThreadDetailActionToolbar(
             )
             CircularToolbarIcon(FeedflowIconMap.symbol("square.and.arrow.up"), stringResource(R.string.share), onShare)
             CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), stringResource(R.string.ai_summary_action), onAiSummary)
+            CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme), onTheme)
             CircularToolbarIcon(FeedflowIconMap.symbol("safari.fill"), stringResource(R.string.browser), onOpenBrowser)
             CircularToolbarIcon(FeedflowIconMap.symbol("arrow.up.forward.app"), stringResource(R.string.open_in_browser), onOpenExternal)
             CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.select_community), onHome)
