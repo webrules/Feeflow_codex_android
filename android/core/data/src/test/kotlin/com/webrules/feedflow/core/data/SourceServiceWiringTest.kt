@@ -105,18 +105,19 @@ class SourceServiceWiringTest {
                   <td class="lastpost"><cite><a href="redirect.php?tid=99">2026-07-03 11:30</a></cite><em><a href="space.php?uid=456">bob</a></em></td>
                 </tbody>
             """,
-            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=1&sid=SID123" to """
+            "https://www.4d4y.com/forum/viewthread.php?tid=99&sid=SID123" to """
                 <h2><a href="viewthread.php?tid=99">4D4Y detail</a></h2>
                 <a href="forumdisplay.php?fid=7">技术交流</a>
                 <a href="space.php?uid=123">alice</a><em>发表于 1h</em>
                 <input type="hidden" name="formhash" value="abcd1234">
+                <div id="authorposton456"></div>
                 <div class="detailcon">Original<br>post<div class="t_attach">download.bin</div><ignore_js_op>ignored attachment</ignore_js_op><img src="https://cdn.example.com/a.jpg"><img src="/images/common/back.gif"><a href="https://example.com">Example</a></div>
                 <li id="pid456">
                   <a href="space.php?uid=456">bob</a>/ 30m</div>
                   <div class="replycon">Reply<br>content<img src="https://cdn.example.com/r.png"></div>
                 </li>
             """,
-            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=2&sid=SID123" to """
+            "https://www.4d4y.com/forum/viewthread.php?tid=99&sid=SID123&page=2&extra=page%3D1" to """
                 <h2><a href="viewthread.php?tid=99">4D4Y detail</a></h2>
                 <a href="forumdisplay.php?fid=7">技术交流</a>
                 <li id="pid789">
@@ -157,6 +158,7 @@ class SourceServiceWiringTest {
         assertEquals("bob", detail.comments.single().author.username)
         assertTrue(detail.comments.single().content.contains("[IMAGE:https://cdn.example.com/r.png]"))
         val secondPage = service.fetchThreadDetail("99", 2)
+        assertEquals("https://www.4d4y.com/forum/viewthread.php?tid=99&sid=SID123&page=2&extra=page%3D1", httpClient.lastGetUrl)
         assertEquals("", secondPage.thread.content)
         assertEquals("", secondPage.thread.author.username)
         assertEquals(0, secondPage.thread.commentCount)
@@ -288,7 +290,7 @@ class SourceServiceWiringTest {
         val service = FourD4YService(
             store = store,
             httpClient = SourceFixtureHttpClient(
-                "https://www.4d4y.com/forum/viewthread.php?tid=3454758&page=1" to """
+                "https://www.4d4y.com/forum/viewthread.php?tid=3454758" to """
                     <html>
                     <head>
                     <title>国家刺激经济的终极杀招是啥？ - Discovery -  4D4Y  </title>
@@ -354,44 +356,46 @@ class SourceServiceWiringTest {
     @Test fun fourD4YServiceParsesDesktopThreadDetailLikeIos() = runBlocking {
         val store = InMemoryFeedflowStore()
         store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.4d4y.com/forum/viewthread.php?tid=901" to """
+                <html>
+                <head>
+                  <title>Desktop protected topic - Category - 4D4Y</title>
+                  <script>var fid = parseInt('35'), tid = parseInt('901')</script>
+                </head>
+                <body>
+                  <div class="pages"><a>1</a><a>2</a></div>
+                  <table>
+                    <tr>
+                      <td class="postauthor">
+                        <div class="postinfo"><a href="space.php?uid=111">alice</a></div>
+                      </td>
+                      <td class="t_msgfont" id="postmessage_501">
+                        Original desktop<br />
+                        post <img src="https://cdn.example.com/original.jpg" />
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="postauthor">
+                        <div class="postinfo"><a href="space.php?uid=222">bob</a></div>
+                      </td>
+                      <td id="postmessage_502" class="t_msgfont">
+                        Reply desktop<br />content
+                      </td>
+                    </tr>
+                  </table>
+                </body>
+                </html>
+            """.trimIndent(),
+        )
         val service = FourD4YService(
             store = store,
-            httpClient = SourceFixtureHttpClient(
-                "https://www.4d4y.com/forum/viewthread.php?tid=901&page=1" to """
-                    <html>
-                    <head>
-                      <title>Desktop protected topic - Category - 4D4Y</title>
-                      <script>var fid = parseInt('35'), tid = parseInt('901')</script>
-                    </head>
-                    <body>
-                      <div class="pages"><a>1</a><a>2</a></div>
-                      <table>
-                        <tr>
-                          <td class="postauthor">
-                            <div class="postinfo"><a href="space.php?uid=111">alice</a></div>
-                          </td>
-                          <td class="t_msgfont" id="postmessage_501">
-                            Original desktop<br />
-                            post <img src="https://cdn.example.com/original.jpg" />
-                          </td>
-                        </tr>
-                        <tr>
-                          <td class="postauthor">
-                            <div class="postinfo"><a href="space.php?uid=222">bob</a></div>
-                          </td>
-                          <td id="postmessage_502" class="t_msgfont">
-                            Reply desktop<br />content
-                          </td>
-                        </tr>
-                      </table>
-                    </body>
-                    </html>
-                """.trimIndent(),
-            ),
+            httpClient = httpClient,
         )
 
         val detail = service.fetchThreadDetail("901", 1)
 
+        assertEquals("https://www.4d4y.com/forum/viewthread.php?tid=901", httpClient.lastGetUrl)
         assertEquals("Desktop protected topic", detail.thread.title)
         assertEquals("35", detail.thread.community.id)
         assertEquals("111", detail.thread.author.id)

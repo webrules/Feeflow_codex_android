@@ -485,7 +485,7 @@ class FourD4YService(
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
         val cookies = authCookies()
-        val html = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$threadId&page=$page", cookies), cookies)
+        val html = fetch(threadDetailUrl(threadId, page, cookies), cookies)
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
         return ThreadDetailResult(parsed.first, parsed.second, parsed.third)
@@ -513,6 +513,15 @@ class FourD4YService(
         val base = withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId", cookies)
         val pageParam = if (page > 1) "&page=$page" else ""
         return "$base$pageParam&_t=${Instant.now().epochSecond}"
+    }
+
+    private fun threadDetailUrl(
+        threadId: String,
+        page: Int,
+        cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
+    ): String {
+        val base = withSid("https://www.4d4y.com/forum/viewthread.php?tid=$threadId", cookies)
+        return if (page > 1) "$base&page=$page&extra=page%3D1" else base
     }
 
     private fun validateSessionHtml(html: String): Boolean {
