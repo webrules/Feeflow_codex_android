@@ -1775,13 +1775,36 @@ private fun SearchResultsScreen(
     onHome: () -> Unit,
     onThreadClick: (FeedThread) -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
     var results by remember(site, query) { mutableStateOf(LoadableContent.loaded(SearchResult(emptyList(), false))) }
     var refreshToken by remember(site, query) { mutableStateOf(0) }
+    var page by remember(site, query) { mutableStateOf(1) }
+    var isLoadingMore by remember(site, query) { mutableStateOf(false) }
     LaunchedEffect(site, query, requiresLogin, refreshToken) {
         if (!requiresLogin) {
             results = results.copy(isLoading = true)
             results = loader.search(site, query)
+            page = 1
+            isLoadingMore = false
         }
+    }
+    suspend fun loadMoreSearchResults() {
+        if (isLoadingMore || !results.value.hasMore || requiresLogin) return
+        isLoadingMore = true
+        val nextPage = page + 1
+        val next = loader.search(site, query, nextPage)
+        val existingIds = results.value.threads.map { it.id }.toSet()
+        val newThreads = next.value.threads.filterNot { existingIds.contains(it.id) }
+        results = LoadableContent.loaded(
+            value = SearchResult(
+                threads = results.value.threads + newThreads,
+                hasMore = next.value.hasMore && newThreads.isNotEmpty(),
+            ),
+            warning = next.warning ?: results.warning,
+            loadedFromCache = next.loadedFromCache,
+        )
+        if (newThreads.isNotEmpty()) page = nextPage
+        isLoadingMore = false
     }
     Scaffold(
         bottomBar = {
@@ -1817,6 +1840,20 @@ private fun SearchResultsScreen(
                 } else {
                     items(results.value.threads) { thread ->
                         ThreadRow(thread = thread, site = site, onClick = { onThreadClick(thread) })
+                    }
+                    if (results.value.hasMore) {
+                        item {
+                            LaunchedEffect(results.value.threads.size) {
+                                loadMoreSearchResults()
+                            }
+                            Button(
+                                enabled = !isLoadingMore,
+                                onClick = { scope.launch { loadMoreSearchResults() } },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(if (isLoadingMore) stringResource(R.string.loading) else stringResource(R.string.load_more_topics))
+                            }
+                        }
                     }
                 }
             }
