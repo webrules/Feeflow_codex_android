@@ -103,6 +103,7 @@ iOSInjectionProject/
 
 # Android
 .gradle/
+.android-sdk/
 local.properties
 captures/
 *.apk

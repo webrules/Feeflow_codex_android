@@ -7,6 +7,8 @@ import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.model.User
 import com.webrules.feedflow.core.network.FeedflowCookie
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
@@ -573,6 +575,31 @@ object HackerNewsContentCleaner {
             return rowThreads.ifEmpty { parseThreadLinksFallback(html, community) }
         }
 
+        fun parseSearchThreads(html: String): List<FeedThread> {
+            val community = Community("search", "Search", "", "4d4y", 0, 0)
+            return Regex(
+                """<a\b[^>]*href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=(\d+)[^"']*["'][^>]*>(.*?)</a>""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            )
+                .findAll(html)
+                .mapNotNull { match ->
+                    val title = match.groupValues[2].cleanThreadListTitle()
+                    if (title.isBlank()) return@mapNotNull null
+                    FeedThread(
+                        id = match.groupValues[1],
+                        title = title,
+                        content = "",
+                        author = User("", "Unknown", "person.circle"),
+                        community = community,
+                        timeAgo = "",
+                        likeCount = 0,
+                        commentCount = 0,
+                    )
+                }
+                .distinctBy { it.id }
+                .toList()
+        }
+
         private fun parseThreadLinksFallback(html: String, community: Community): List<FeedThread> =
             Regex("""<a\b[^>]*href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=(\d+)[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .findAll(html)
@@ -1000,5 +1027,46 @@ object HackerNewsContentCleaner {
             )
             val totalPages = null
             return Triple(thread, posts.drop(1), totalPages)
+        }
+
+        fun parseSearch(json: String): SearchResult {
+            val root = ZhihuJson.parse(json)?.obj() ?: return SearchResult(emptyList(), false)
+            val postsByTopicId = root.arr("posts")
+                .orEmpty()
+                .mapNotNull { element ->
+                    val post = element.obj() ?: return@mapNotNull null
+                    val topicId = post.int("topic_id") ?: return@mapNotNull null
+                    topicId to post
+                }
+                .toMap()
+            val threads = root.arr("topics").orEmpty().mapNotNull { element ->
+                val topic = element.obj() ?: return@mapNotNull null
+                val topicId = topic.int("id") ?: return@mapNotNull null
+                val post = postsByTopicId[topicId]
+                val username = post.str("username") ?: "Unknown"
+                val avatar = post.str("avatar_template")?.let { resolveAvatar(it) } ?: "person.circle"
+                FeedThread(
+                    id = topicId.toString(),
+                    title = topic.str("title").orEmpty().decodeHtmlEntities(),
+                    content = cleanCooked(post.str("blurb") ?: post.str("cooked").orEmpty()),
+                    author = User(post.int("user_id")?.toString() ?: username, username, avatar),
+                    community = Community(
+                        id = topic.int("category_id")?.toString().orEmpty(),
+                        name = "Search",
+                        description = "",
+                        category = "linux_do",
+                        activeToday = 0,
+                        onlineNow = 0,
+                    ),
+                    timeAgo = relativeTime(topic.str("created_at")),
+                    likeCount = topic.int("like_count") ?: 0,
+                    commentCount = ((topic.int("posts_count") ?: 1) - 1).coerceAtLeast(0),
+                    tags = topic.arr("tags")
+                        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        ?.takeIf { it.isNotEmpty() },
+                )
+            }
+            val hasMore = root.obj("grouped_search_result").bool("more_results") ?: (threads.size >= 20)
+            return SearchResult(threads, hasMore)
         }
     }

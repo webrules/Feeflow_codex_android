@@ -65,6 +65,47 @@ class FeedflowRepositoryCacheParityTest {
         assertEquals("ok", store.getCachedThread(thread.id, ForumSite.FourD4Y.serviceId)?.second?.single()?.content)
         }
     }
+
+    @Test fun prefetchUsesIosQueueLimitDebounceAndRateControl() {
+        runBlocking {
+        val store = InMemoryFeedflowStore()
+        val requested = mutableListOf<String>()
+        val delays = mutableListOf<Long>()
+        val service = object : StaticForumService() {
+            override val name = "Prefetch"
+            override val id = "prefetch"
+            override val logo = "prefetch"
+
+            override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
+                requested += threadId
+                val detail = thread.copy(id = threadId)
+                return ThreadDetailResult(detail, emptyList(), 1)
+            }
+
+            override fun getWebUrl(thread: FeedThread): String = thread.id
+        }
+        val repository = FeedflowRepository(
+            store = store,
+            serviceFactory = { service },
+            prefetchDelay = { delays += it },
+        )
+        val candidates = (1..7).map { index -> thread.copy(id = "thread-$index") }
+
+        repository.prefetchThreadDetails(ForumSite.Zhihu, candidates, enabled = true, isWifi = true)
+
+        assertEquals((1..5).map { "thread-$it" }, requested)
+        assertEquals(
+            listOf(
+                BackgroundPrefetchPolicy.debounceMillis,
+                BackgroundPrefetchPolicy.interItemDelayMillis,
+                BackgroundPrefetchPolicy.interItemDelayMillis,
+                BackgroundPrefetchPolicy.interItemDelayMillis,
+                BackgroundPrefetchPolicy.interItemDelayMillis,
+            ),
+            delays,
+        )
+        }
+    }
 }
 
 private class SucceedingService(

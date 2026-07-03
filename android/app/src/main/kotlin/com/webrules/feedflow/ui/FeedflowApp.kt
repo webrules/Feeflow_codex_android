@@ -154,6 +154,7 @@ import com.webrules.feedflow.R
 import com.webrules.feedflow.auth.AndroidWebLoginCookieBridge
 import com.webrules.feedflow.core.data.AiSummaryUiState
 import com.webrules.feedflow.core.data.AuthSessionCoordinator
+import com.webrules.feedflow.core.data.BackgroundPrefetchPolicy
 import java.time.Duration
 import com.webrules.feedflow.core.data.AvatarRenderingPolicy
 import com.webrules.feedflow.core.data.ContentBlock
@@ -271,7 +272,6 @@ private object FeedflowIconMap {
     }
 }
 
-private const val BackgroundPrefetchSettingKey = "background_prefetch"
 private const val DarkThemeSettingKey = "dark_theme"
 private const val LanguageSettingKey = "language"
 
@@ -327,7 +327,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 SiteLoginConfig.forSite(site)?.hasAuthenticatedSession(store.getCookies(site.serviceId).orEmpty()) == true
             }.toSet(),
             geminiApiKey = store.getEncryptedSetting(FeedflowDatabaseContract.geminiApiKey).orEmpty(),
-            backgroundPrefetch = store.getSetting(BackgroundPrefetchSettingKey)?.toBooleanStrictOrNull() ?: true,
+            backgroundPrefetch = BackgroundPrefetchPolicy.loadEnabled(store),
             rssFeeds = store.getRssFeeds().ifEmpty { defaults.rssFeeds },
         )
     }
@@ -573,7 +573,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             backgroundPrefetch = homeState.backgroundPrefetch,
             onSave = { key, prefetch ->
                 store.saveEncryptedSetting(FeedflowDatabaseContract.geminiApiKey, key)
-                store.saveSetting(BackgroundPrefetchSettingKey, prefetch.toString())
+                store.saveSetting(BackgroundPrefetchPolicy.settingKey, prefetch.toString())
                 appStateController.saveSettings(key, prefetch)
                 homeState = appStateController.homeState
                 route = FeedflowRoute.SiteList

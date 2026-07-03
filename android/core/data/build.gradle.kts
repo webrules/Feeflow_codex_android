@@ -20,3 +20,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
     testImplementation(kotlin("test"))
 }
+
+tasks.withType<Test>().configureEach {
+    systemProperty(
+        "feedflow.liveTests",
+        providers.gradleProperty("feedflow.liveTests").orElse("false").get(),
+    )
+}

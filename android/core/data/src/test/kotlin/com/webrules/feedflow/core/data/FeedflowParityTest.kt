@@ -491,6 +491,7 @@ class ZhihuAndLocalizationParityTest {
         assertEquals("login_4d4y_cookies", FeedflowDatabaseContract.cookieSettingKey("4d4y"))
         assertTrue(FeedflowDatabaseContract.schemaStatements.any { it.contains("PRIMARY KEY (id, serviceId)") })
         assertTrue(FeedflowDatabaseContract.schemaStatements.any { it.contains("PRIMARY KEY (thread_id, service_id)") })
+        assertTrue(FeedflowDatabaseContract.schemaStatements.any { it.contains("PRIMARY KEY (postId, serviceId)") })
         assertTrue(FeedflowDatabaseContract.schemaStatements.any { it.contains("CREATE TABLE IF NOT EXISTS rss_feeds") })
         assertEquals("4d4y_2_page1", FeedflowCacheKeys.topicList("4d4y", "2"))
         assertEquals("4d4y_2_page3", FeedflowCacheKeys.topicList("4d4y", "2", page = 3))

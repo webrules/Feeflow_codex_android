@@ -105,9 +105,19 @@ class AiTtsPrefetchParityTest {
         assertTrue(PrefetchGate.shouldPrefetch(base))
         assertFalse(PrefetchGate.shouldPrefetch(base.copy(enabled = false)))
         assertFalse(PrefetchGate.shouldPrefetch(base.copy(isWifi = false)))
-        assertFalse(PrefetchGate.shouldPrefetch(base.copy(site = ForumSite.Zhihu)))
+        ForumSite.entries.forEach { site -> assertTrue(PrefetchGate.shouldPrefetch(base.copy(site = site))) }
         assertFalse(PrefetchGate.shouldPrefetch(base.copy(detailCached = true)))
-        assertFalse(PrefetchGate.shouldPrefetch(base.copy(queueSize = 6)))
+        assertFalse(PrefetchGate.shouldPrefetch(base.copy(queueSize = BackgroundPrefetchPolicy.maxQueueSize)))
+        assertEquals("background_prefetch_enabled", BackgroundPrefetchPolicy.settingKey)
+        assertFalse(BackgroundPrefetchPolicy.defaultEnabled)
+        assertEquals(5, BackgroundPrefetchPolicy.maxQueueSize)
+
+        val legacyStore = InMemoryFeedflowStore().apply {
+            saveSetting(BackgroundPrefetchPolicy.legacySettingKey, "true")
+        }
+        assertTrue(BackgroundPrefetchPolicy.loadEnabled(legacyStore))
+        assertEquals("true", legacyStore.getSetting(BackgroundPrefetchPolicy.settingKey))
+        assertEquals(null, legacyStore.getSetting(BackgroundPrefetchPolicy.legacySettingKey))
     }
 
     private class RecordingGeminiSummaryClient : GeminiSummaryClient {

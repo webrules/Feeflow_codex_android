@@ -399,6 +399,19 @@ class DiscourseService(
     override val supportsThreadCreation = true
     override fun canCreateThread(community: Community): Boolean = true
 
+    override suspend fun restoreSession(): Boolean {
+        val cookies = store?.getCookies(id).orEmpty()
+        if (cookies.isEmpty()) return false
+        val body = runCatching {
+            httpClient.get(
+                "https://linux.do/session/current.json",
+                cookies,
+                mapOf("Accept" to "application/json"),
+            )
+        }.getOrNull() ?: return false
+        return ZhihuJson.parse(body)?.obj().obj("current_user") != null
+    }
+
     override suspend fun fetchCategories(): List<Community> =
         DiscourseParser.parseCategories(httpClient.get("https://linux.do/categories.json", store?.getCookies(id).orEmpty()))
 
@@ -433,6 +446,17 @@ class DiscourseService(
             body = "topic_id=${topicId.formEncode()}&raw=${content.formEncode()}",
             cookies = cookies,
         )
+    }
+
+    override suspend fun searchThreads(query: String, page: Int): SearchResult {
+        if (!restoreSession()) throw FeedflowError.AuthRequired
+        val encoded = query.formEncode()
+        val json = httpClient.get(
+            "https://linux.do/search/query?term=$encoded&page=$page",
+            store?.getCookies(id).orEmpty(),
+            mapOf("Accept" to "application/json"),
+        )
+        return DiscourseParser.parseSearch(json)
     }
 
     override fun getWebUrl(thread: FeedThread): String = "https://linux.do/t/${thread.id}"
@@ -489,6 +513,21 @@ class FourD4YService(
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
         return ThreadDetailResult(parsed.first, parsed.second, parsed.third)
+    }
+
+    override suspend fun searchThreads(query: String, page: Int): SearchResult {
+        val cookies = authCookies()
+        if (cookies.isEmpty()) throw FeedflowError.AuthRequired
+        if (store?.getSetting("4d4y_sid").isNullOrBlank() && cookies.none { it.name.equals("sid", ignoreCase = true) }) {
+            fetchCategories()
+        }
+        val url = withSid(
+            "https://www.4d4y.com/forum/search.php?searchsubmit=yes" +
+                "&srchtxt=${query.gbkFormEncode()}&searchfield=all&page=$page",
+            cookies,
+        )
+        val threads = FourD4YParser.parseSearchThreads(fetch(url, cookies))
+        return SearchResult(threads, threads.size >= 20)
     }
 
     private fun authCookies(): List<com.webrules.feedflow.core.network.FeedflowCookie> =

@@ -27,7 +27,7 @@ data class FeedflowHomeState(
     val enabledSites: Set<ForumSite> = ForumSite.entries.toSet(),
     val signedInSites: Set<ForumSite> = emptySet(),
     val geminiApiKey: String = "",
-    val backgroundPrefetch: Boolean = true,
+    val backgroundPrefetch: Boolean = BackgroundPrefetchPolicy.defaultEnabled,
     val rssFeeds: List<RssFeedSubscription> = listOf(
         RssFeedSubscription("https://hacker-podcast.agi.li/rss.xml", "Hacker Podcast", true, 0),
         RssFeedSubscription("https://www.ruanyifeng.com/blog/atom.xml", "Ruanyifeng Blog", true, 0),

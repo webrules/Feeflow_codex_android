@@ -13,6 +13,7 @@ import com.webrules.feedflow.core.network.HttpStatusException
 import com.webrules.feedflow.core.network.UrlConnectionFeedflowHttpClient
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 data class CacheFirstResult<T>(
@@ -29,6 +30,7 @@ class FeedflowRepository(
     private val httpClient: FeedflowHttpClient = UrlConnectionFeedflowHttpClient(),
     private val serviceFactory: (ForumSite) -> ForumService = { site -> site.makeService(store, httpClient) },
     private val summaryClient: GeminiSummaryClient = GeminiRestSummaryClient(httpClient),
+    private val prefetchDelay: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val summaryCoordinator = AiSummaryCoordinator(store)
 
@@ -105,10 +107,28 @@ class FeedflowRepository(
         threads: List<FeedThread>,
         enabled: Boolean,
         isWifi: Boolean,
-        maxQueueSize: Int = 6,
+        maxQueueSize: Int = BackgroundPrefetchPolicy.maxQueueSize,
     ) {
+        val queue = threads
+            .distinctBy { it.id }
+            .filter { thread ->
+                PrefetchGate.shouldPrefetch(
+                    PrefetchDecisionInput(
+                        enabled = enabled,
+                        isWifi = isWifi,
+                        site = site,
+                        detailCached = isThreadDetailCached(site, thread),
+                        queueSize = 0,
+                        maxQueueSize = maxQueueSize,
+                    ),
+                )
+            }
+            .take(maxQueueSize)
+        if (queue.isEmpty()) return
+
+        prefetchDelay(BackgroundPrefetchPolicy.debounceMillis)
         var queued = 0
-        for (thread in threads) {
+        for ((index, thread) in queue.withIndex()) {
             val decision = PrefetchDecisionInput(
                 enabled = enabled,
                 isWifi = isWifi,
@@ -121,6 +141,9 @@ class FeedflowRepository(
             loadThreadDetail(site, thread)
             queued++
             if (queued >= maxQueueSize) break
+            if (index < queue.lastIndex) {
+                prefetchDelay(BackgroundPrefetchPolicy.interItemDelayMillis)
+            }
         }
     }
 

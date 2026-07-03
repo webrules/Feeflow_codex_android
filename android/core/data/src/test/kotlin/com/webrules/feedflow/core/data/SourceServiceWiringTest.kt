@@ -12,6 +12,19 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SourceServiceWiringTest {
+    @Test fun authenticatedSearchesRejectMissingSessions() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        val httpClient = SourceFixtureHttpClient()
+
+        assertFailsWith<FeedflowError.AuthRequired> {
+            DiscourseService(store, httpClient).searchThreads("android", 1)
+        }
+        assertFailsWith<FeedflowError.AuthRequired> {
+            FourD4YService(store, httpClient).searchThreads("android", 1)
+        }
+        Unit
+    }
+
     @Test fun v2exServiceUsesTabsThreadParserAndReplyParser() = runBlocking {
         val store = InMemoryFeedflowStore()
         store.saveCookies("v2ex", listOf(FeedflowCookie("a2", "token", "v2ex.com", expiresAtMillis = null)))
@@ -58,6 +71,7 @@ class SourceServiceWiringTest {
         val store = InMemoryFeedflowStore()
         store.saveCookies("linux_do", listOf(FeedflowCookie("_t", "token", "linux.do", expiresAtMillis = null)))
         val httpClient = SourceFixtureHttpClient(
+            "https://linux.do/session/current.json" to """{"current_user":{"id":1,"username":"alice"}}""",
             "https://linux.do/categories.json" to """{"category_list":{"categories":[{"id":5,"name":"General","description":"Talk","slug":"general","topic_count":42}]}}""",
             "https://linux.do/c/5.json?page=1" to """{"topic_list":{"topics":[{"id":9,"title":"Linux topic","posts_count":3}]}}""",
             "https://linux.do/t/9.json?page=1" to """
@@ -65,6 +79,13 @@ class SourceServiceWiringTest {
                   {"id":91,"username":"alice","cooked":"<p>Original &amp; post</p>"},
                   {"id":92,"username":"bob","cooked":"<p>Reply<br>body</p>"}
                 ]}}
+            """.trimIndent(),
+            "https://linux.do/search/query?term=android+parity&page=1" to """
+                {
+                  "topics":[{"id":88,"title":"Android &amp; parity","created_at":"2026-07-03T12:00:00Z","posts_count":3,"like_count":7,"category_id":5,"tags":["android"]}],
+                  "posts":[{"topic_id":88,"user_id":1,"username":"alice","avatar_template":"/user_avatar/linux.do/alice/{size}/1.png","blurb":"<p>Search &amp; preview</p>"}],
+                  "grouped_search_result":{"more_results":true}
+                }
             """.trimIndent(),
         )
         val service = DiscourseService(
@@ -81,6 +102,13 @@ class SourceServiceWiringTest {
         assertEquals("Original & post", detail.thread.content)
         assertEquals("bob", detail.comments.single().author.username)
         assertTrue(detail.comments.single().content.contains("Reply"))
+        assertTrue(service.restoreSession())
+        val search = service.searchThreads("android parity", 1)
+        assertEquals("Android & parity", search.threads.single().title)
+        assertEquals("Search & preview", search.threads.single().content)
+        assertEquals("alice", search.threads.single().author.username)
+        assertEquals(listOf("android"), search.threads.single().tags)
+        assertTrue(search.hasMore)
         service.createThread("5", "New title", "New body")
         assertEquals("https://linux.do/posts.json", httpClient.lastPostUrl)
         assertEquals("title=New+title&raw=New+body&category=5", httpClient.lastPostBody)
@@ -129,6 +157,11 @@ class SourceServiceWiringTest {
                 <input type="hidden" name="formhash" value="abcd1234">
                 <div id="authorposton456"></div>
             """,
+            "https://www.4d4y.com/forum/search.php?searchsubmit=yes&srchtxt=android+parity&searchfield=all&page=1&sid=SID123" to """
+                <a href="viewthread.php?tid=501&sid=SID123"><span>Android parity result</span></a>
+                <a href="viewthread.php?tid=501&sid=SID123">Android parity result duplicate</a>
+                <a href="viewthread.php?tid=502&sid=SID123">Second result</a>
+            """,
             "https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&sid=SID123" to """
                 <input type="hidden" name="formhash" value="ijkl9012">
             """,
@@ -148,6 +181,10 @@ class SourceServiceWiringTest {
         assertEquals(4, threads.single().commentCount)
         assertEquals("2026-07-03 11:30", threads.single().lastPostTime)
         assertEquals("bob", threads.single().lastPosterName)
+        val search = service.searchThreads("android parity", 1)
+        assertEquals(listOf("501", "502"), search.threads.map { it.id })
+        assertEquals("Android parity result", search.threads.first().title)
+        assertTrue(!search.hasMore)
         val detail = service.fetchThreadDetail("99", 1)
         assertEquals("4D4Y detail", detail.thread.title)
         assertTrue(detail.thread.content.contains("Original"))
