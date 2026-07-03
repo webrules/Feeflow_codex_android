@@ -106,10 +106,18 @@ class SourceServiceWiringTest {
                 <a href="forumdisplay.php?fid=7">技术交流</a>
                 <a href="space.php?uid=123">alice</a><em>发表于 1h</em>
                 <input type="hidden" name="formhash" value="abcd1234">
-                <div class="detailcon">Original post</div>
+                <div class="detailcon">Original<br>post<div class="t_attach">download.bin</div><ignore_js_op>ignored attachment</ignore_js_op><img src="https://cdn.example.com/a.jpg"><img src="/images/common/back.gif"><a href="https://example.com">Example</a></div>
                 <li id="pid456">
                   <a href="space.php?uid=456">bob</a>/ 30m</div>
-                  <div class="replycon">Reply content</div>
+                  <div class="replycon">Reply<br>content<img src="https://cdn.example.com/r.png"></div>
+                </li>
+            """,
+            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=2" to """
+                <h2><a href="viewthread.php?tid=99">4D4Y detail</a></h2>
+                <a href="forumdisplay.php?fid=7">技术交流</a>
+                <li id="pid789">
+                  <a href="space.php?uid=789">carol</a>/ 10m</div>
+                  <div class="replycon">Second page reply</div>
                 </li>
             """,
             "https://www.4d4y.com/forum/viewthread.php?tid=99" to """
@@ -136,7 +144,17 @@ class SourceServiceWiringTest {
         val detail = service.fetchThreadDetail("99", 1)
         assertEquals("4D4Y detail", detail.thread.title)
         assertTrue(detail.thread.content.contains("Original"))
+        assertTrue(detail.thread.content.contains("[IMAGE:https://cdn.example.com/a.jpg]"))
+        assertTrue(detail.thread.content.contains("Example (https://example.com)"))
+        assertTrue(!detail.thread.content.contains("download.bin"))
+        assertTrue(!detail.thread.content.contains("back.gif"))
         assertEquals("bob", detail.comments.single().author.username)
+        assertTrue(detail.comments.single().content.contains("[IMAGE:https://cdn.example.com/r.png]"))
+        val secondPage = service.fetchThreadDetail("99", 2)
+        assertEquals("", secondPage.thread.content)
+        assertEquals("", secondPage.thread.author.username)
+        assertEquals(0, secondPage.thread.commentCount)
+        assertEquals("carol", secondPage.comments.single().author.username)
         service.postComment("99", "7", "Reply body")
         assertEquals("https://www.4d4y.com/forum/post.php?action=reply&fid=7&tid=99&extra=&replysubmit=yes&inajax=1", httpClient.lastPostUrl)
         assertEquals("formhash=abcd1234&subject=&message=Reply+body&replysubmit=yes", httpClient.lastPostBody)

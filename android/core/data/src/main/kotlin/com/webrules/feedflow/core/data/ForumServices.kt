@@ -594,15 +594,14 @@ class FourD4YService(
             .find(html)?.groupValues?.get(1)?.stripTags()?.decodeHtmlEntities() ?: return null
         val authorMatch = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>.*?发表于\s*([^<]+)</em>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(html)
         val communityMatch = Regex("""forumdisplay\.php\?fid=(\d+)[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(html)
-        val content = Regex("""<div class="detailcon"[^>]*>(.*?)</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            .find(html)?.groupValues?.get(1)?.stripTags()?.decodeHtmlEntities().orEmpty()
+        val rawContent = extractDetailContent(html)
         val comments = Regex("""<li id="pid(\d+)">.*?space\.php\?uid=(\d+)[^>]*>([^<]+)</a>/\s*([^<]+)</div>\s*<div class="replycon">(.*?)</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .findAll(html)
             .map {
                 Comment(
                     id = it.groupValues[1],
                     author = User(it.groupValues[2], it.groupValues[3].decodeHtmlEntities(), avatarUrlForUid(it.groupValues[2])),
-                    content = it.groupValues[5].stripTags().decodeHtmlEntities(),
+                    content = cleanContent(it.groupValues[5]),
                     timeAgo = it.groupValues[4].trim(),
                     likeCount = 0,
                 )
@@ -620,12 +619,16 @@ class FourD4YService(
         val thread = FeedThread(
             id = threadId,
             title = title,
-            content = content,
-            author = User(authorMatch?.groupValues?.get(1).orEmpty(), authorMatch?.groupValues?.get(2).orEmpty(), avatarUrlForUid(authorMatch?.groupValues?.get(1).orEmpty())),
+            content = if (page == 1) cleanContent(rawContent) else "",
+            author = if (page == 1) {
+                User(authorMatch?.groupValues?.get(1).orEmpty(), authorMatch?.groupValues?.get(2).orEmpty(), avatarUrlForUid(authorMatch?.groupValues?.get(1).orEmpty()))
+            } else {
+                User("0", "", "")
+            },
             community = community,
-            timeAgo = authorMatch?.groupValues?.get(3)?.trim().orEmpty(),
+            timeAgo = if (page == 1) authorMatch?.groupValues?.get(3)?.trim().orEmpty() else "",
             likeCount = 0,
-            commentCount = comments.size,
+            commentCount = if (page == 1) comments.size else 0,
         )
         return Triple(thread, comments, totalPages)
     }
@@ -634,6 +637,45 @@ class FourD4YService(
         fun parseLoggedInUsername(html: String): String? =
             Regex("""欢迎您回来，\s*<strong>([^<]+)</strong>""").find(html)?.groupValues?.get(1)
                 ?: Regex("""space\.php\?uid=\d+[^>]*font-weight:\s*800[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+
+        fun cleanContent(html: String): String {
+            var processed = html
+                .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+                .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            processed = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).replace(processed) { match ->
+                val src = match.groupValues[1]
+                if (src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif")) {
+                    ""
+                } else {
+                    "\n[IMAGE:$src]\n"
+                }
+            }
+            processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).replace(processed) { match ->
+                val href = match.groupValues[1].decodeHtmlEntities()
+                val label = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
+                if (label.isBlank() || label == href) href else "$label ($href)"
+            }
+            return processed
+                .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
+                .stripTags()
+                .decodeHtmlEntities()
+                .lines()
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
+        }
+
+        private fun extractDetailContent(html: String): String {
+            val startMatch = Regex("""<div[^>]*class=["'][^"']*detailcon[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE).find(html)
+                ?: return ""
+            val contentStart = startMatch.range.last + 1
+            val end = Regex("""<li\s+id=["']?pid\d+|<div[^>]*class=["'][^"']*replylist|</body>""", RegexOption.IGNORE_CASE)
+                .find(html, contentStart)
+                ?.range
+                ?.first
+                ?: html.length
+            return html.substring(contentStart, end)
+        }
     }
 }
 
