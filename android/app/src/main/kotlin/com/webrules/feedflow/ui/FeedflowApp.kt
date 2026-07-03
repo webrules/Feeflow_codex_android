@@ -585,7 +585,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             onAccepted = {
                 appStateController.setSignedIn(current.site, true)
                 homeState = appStateController.homeState
-                route = FeedflowRoute.Login
+                route = FeedflowRoute.Communities(current.site)
             },
             onClose = { route = FeedflowRoute.Login },
         )

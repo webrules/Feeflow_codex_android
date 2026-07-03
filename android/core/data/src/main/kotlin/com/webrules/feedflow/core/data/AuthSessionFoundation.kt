@@ -43,6 +43,7 @@ class AuthSessionCoordinator(
 
         val upgraded = siteCookies.map { CookieMatcher.withThirtyDayExpiry(it, nowMillis()) }
         store.replaceCookies(site.serviceId, upgraded)
+        store.saveCommunities(emptyList(), site.serviceId)
         store.clearCachedTopicsForService(site.serviceId)
         rejectedSignatures.remove(site)
         return LoginCaptureResult.Success(site, upgraded)

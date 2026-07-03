@@ -18,12 +18,24 @@ class AndroidWebLoginCookieBridge(
         webView.settings.javaScriptEnabled = true
         webView.settings.javaScriptCanOpenWindowsAutomatically = true
         webView.settings.domStorageEnabled = true
+        webView.settings.setSupportMultipleWindows(true)
+        webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
     }
 
     fun cookiesFor(config: SiteLoginConfig, currentUrl: String?): List<FeedflowCookie> {
-        val cookieUrl = currentUrl?.takeIf { config.shouldCheckCookies(it) } ?: config.loginUrl
-        val header = cookieManager.getCookie(cookieUrl).orEmpty()
-        return WebCookieHeaderParser.parse(header, config.cookieDomain)
+        val urls = linkedSetOf(
+            config.loginUrl,
+            "https://${config.cookieDomain}/",
+            "https://www.${config.cookieDomain}/",
+        )
+        currentUrl?.takeIf { config.shouldCheckCookies(it) }?.let(urls::add)
+        if (config.site == ForumSite.FourD4Y) {
+            urls += "https://www.4d4y.com/forum/index.php"
+            urls += "https://www.4d4y.com/forum/forumdisplay.php?fid=2"
+        }
+        return urls.flatMap { url ->
+            WebCookieHeaderParser.parse(cookieManager.getCookie(url).orEmpty(), config.cookieDomain)
+        }.distinctBy { "${it.name}|${it.domain}|${it.path}" }
     }
 
     fun capture(

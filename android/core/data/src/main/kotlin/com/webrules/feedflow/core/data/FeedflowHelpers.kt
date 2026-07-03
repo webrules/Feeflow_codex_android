@@ -515,12 +515,14 @@ object HackerNewsContentCleaner {
         }
 
         fun parseCategories(html: String): List<Community> =
-            Regex("""href=["']forumdisplay\.php\?fid=(\d+)[^"']*["'][^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
+            Regex("""<a\b[^>]*href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?forumdisplay\.php\?fid=(\d+)[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .findAll(html)
-                .map {
+                .mapNotNull {
+                    val name = it.groupValues[2].stripTags().decodeHtmlEntities().trim()
+                    if (name.isBlank() || name == "4D4Y") return@mapNotNull null
                     Community(
                         id = it.groupValues[1],
-                        name = it.groupValues[2].decodeHtmlEntities(),
+                        name = name,
                         description = "",
                         category = "4D4Y",
                         activeToday = 0,
@@ -888,4 +890,3 @@ object HackerNewsContentCleaner {
             return Triple(thread, posts.drop(1), totalPages)
         }
     }
-

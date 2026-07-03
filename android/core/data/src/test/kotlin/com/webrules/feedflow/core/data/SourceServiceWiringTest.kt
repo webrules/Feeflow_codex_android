@@ -96,8 +96,8 @@ class SourceServiceWiringTest {
             FeedflowCookie("sid", "SID123", "4d4y.com", expiresAtMillis = null),
         ))
         val httpClient = SourceFixtureHttpClient(
-            "https://www.4d4y.com/forum/index.php" to """<a href="forumdisplay.php?fid=7">技术交流</a>""",
-            "https://www.4d4y.com/forum/forumdisplay.php?fid=7&page=1" to """
+            "https://www.4d4y.com/forum/index.php?sid=SID123" to """<a href="forumdisplay.php?fid=7&sid=SID123"><span>技术交流</span></a><a href="logging.php?action=logout">退出</a>""",
+            "https://www.4d4y.com/forum/forumdisplay.php?fid=7&page=1&sid=SID123" to """
                 <tbody id="normalthread_99">
                   <a href="viewthread.php?tid=99">GB18030 topic</a>
                   <a href="space.php?uid=123">alice</a>
@@ -176,13 +176,52 @@ class SourceServiceWiringTest {
         assertEquals("auth=token; sid=SID123", httpClient.lastCookieHeader)
     }
 
+    @Test fun fourD4YLoginSessionShowsProtectedCategoriesAndPersistsSid() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "token", "4d4y.com", expiresAtMillis = null)))
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.4d4y.com/forum/index.php" to """
+                <html><body>
+                    <a href="forumdisplay.php?fid=2&sid=abc123xyz"><span>Discovery</span></a>
+                    <a href="forumdisplay.php?fid=7&sid=abc123xyz">Buy &amp; Sell</a>
+                    <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                </body></html>
+            """,
+            "https://www.4d4y.com/forum/index.php?sid=abc123xyz" to """
+                <html><body>
+                    <a href="forumdisplay.php?fid=2&sid=abc123xyz"><span>Discovery</span></a>
+                    <a href="forumdisplay.php?fid=7&sid=abc123xyz">Buy &amp; Sell</a>
+                    <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                </body></html>
+            """,
+            "https://www.4d4y.com/forum/forumdisplay.php?fid=2&page=1&sid=abc123xyz" to """
+                <tbody id="normalthread_88">
+                  <a href="viewthread.php?tid=88">Protected topic</a>
+                  <a href="space.php?uid=321">member</a>
+                </tbody>
+            """,
+        )
+        val service = FourD4YService(store = store, httpClient = httpClient)
+
+        assertTrue(service.restoreSession())
+        val categories = service.fetchCategories()
+        assertEquals(listOf("Discovery", "Buy & Sell"), categories.map { it.name })
+        assertEquals("abc123xyz", store.getSetting("4d4y_sid"))
+        val threads = service.fetchCategoryThreads("2", categories, 1)
+        assertEquals("Protected topic", threads.single().title)
+    }
+
     @Test fun fourD4YRestoreSessionStoresLoggedInUsernameForDeleteGating() = runBlocking {
         val store = InMemoryFeedflowStore()
         store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
         val service = FourD4YService(
             store = store,
             httpClient = SourceFixtureHttpClient(
-                "https://www.4d4y.com/forum/index.php" to "<div>欢迎您回来，<strong>Webrules</strong></div>",
+                "https://www.4d4y.com/forum/index.php" to """
+                    <a href="forumdisplay.php?fid=2">Discovery</a>
+                    <a href="logging.php?action=logout">退出</a>
+                    <div>欢迎您回来，<strong>Webrules</strong></div>
+                """,
             ),
         )
 

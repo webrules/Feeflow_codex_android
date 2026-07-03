@@ -41,6 +41,7 @@ class AuthSessionFoundationTest {
         val store = InMemoryFeedflowStore(clockMillis = { now })
         store.saveCachedTopics("zhihu_hot_page1", listOf(sampleThread()))
         store.saveCachedTopics("v2ex_hot_page1", listOf(sampleThread().copy(id = "v2ex")))
+        store.saveCommunities(listOf(Community("guest", "Guest", "", "Zhihu", 0, 0)), ForumSite.Zhihu.serviceId)
         val coordinator = AuthSessionCoordinator(store, nowMillis = { now })
 
         val result = coordinator.captureSession(
@@ -52,6 +53,7 @@ class AuthSessionFoundationTest {
         assertEquals(now + 30L * 24 * 60 * 60 * 1000, success.cookies.single().expiresAtMillis)
         assertTrue(coordinator.restoreSession(ForumSite.Zhihu))
         assertNull(store.getCachedTopics("zhihu_hot_page1"))
+        assertTrue(store.getCommunities(ForumSite.Zhihu.serviceId).isEmpty())
         assertEquals("v2ex", store.getCachedTopics("v2ex_hot_page1")?.single()?.id)
     }
 

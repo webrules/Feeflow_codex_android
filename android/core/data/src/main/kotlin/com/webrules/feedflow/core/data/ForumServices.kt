@@ -454,22 +454,25 @@ class FourD4YService(
         if (!cookies.any { it.domain.contains("4d4y.com") && SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies) }) {
             return false
         }
-        val html = runCatching { fetch("https://www.4d4y.com/forum/index.php", cookies) }.getOrNull() ?: return true
-        val username = parseLoggedInUsername(html)
-        username?.let { store?.saveSetting("detected_4d4y_username", it) }
-        return username != null || validateSessionHtml(html)
+        val html = runCatching { fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies) }.getOrNull() ?: return false
+        rememberAuthenticatedPageArtifacts(html)
+        return validateSessionHtml(html)
     }
 
     override fun canCreateThread(community: Community): Boolean = true
     override fun getWebUrl(thread: FeedThread): String = "https://www.4d4y.com/forum/viewthread.php?tid=${thread.id}"
 
     override suspend fun fetchCategories(): List<Community> {
-        val html = fetch("https://www.4d4y.com/forum/index.php", authCookies())
+        val cookies = authCookies()
+        val html = fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies)
+        rememberAuthenticatedPageArtifacts(html)
         return FourD4YParser.parseCategories(html)
     }
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
-        val html = fetch("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId&page=$page", authCookies())
+        val cookies = authCookies()
+        val html = fetch(withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId&page=$page", cookies), cookies)
+        rememberAuthenticatedPageArtifacts(html)
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "4D4Y", 0, 0)
         return FourD4YParser.parseThreadRows(html, community)
     }
@@ -497,13 +500,19 @@ class FourD4YService(
     }
 
     private fun validateSessionHtml(html: String): Boolean {
-        val forumMatches = Regex("""href="forumdisplay\.php\?fid=(\d+)[^"]*"[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
-            .findAll(html).toList()
+        val forums = FourD4YParser.parseCategories(html)
         val lower = html.lowercase()
         val hasLogout = lower.contains("action=logout") || lower.contains("action%3dlogout") || html.contains("退出")
         val hasLogin = (lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
-        val hasDiscovery = forumMatches.any { it.groupValues[2].stripTags().trim() == "Discovery" }
-        return forumMatches.isNotEmpty() && !hasLogin && (hasLogout || hasDiscovery)
+        val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
+        val hasDiscovery = forums.any { it.name == "Discovery" }
+        return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery)
+    }
+
+    private fun rememberAuthenticatedPageArtifacts(html: String) {
+        if (!validateSessionHtml(html)) return
+        FourD4YParser.extractSid(html)?.let { store?.saveSetting("4d4y_sid", it) }
+        parseLoggedInUsername(html)?.let { store?.saveSetting("detected_4d4y_username", it) }
     }
 
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
