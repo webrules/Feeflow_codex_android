@@ -637,8 +637,8 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 .firstOrNull { site -> SiteLoginConfig.forSite(site)?.shouldCheckCookies(current.url) == true }
                 ?.let { site -> store.getCookies(site.serviceId).orEmpty() }
                 .orEmpty(),
-            onToggleBookmark = {
-                if (store.isUrlBookmarked(current.url)) store.removeUrlBookmark(current.url) else store.saveUrlBookmark(current.url, current.title)
+            onToggleBookmark = { url, title ->
+                if (store.isUrlBookmarked(url)) store.removeUrlBookmark(url) else store.saveUrlBookmark(url, title)
                 bookmarkRevision += 1
             },
             onClose = { route = FeedflowRoute.SiteList },
@@ -1957,27 +1957,50 @@ private fun InAppBrowserScreen(
     isBookmarked: Boolean,
     cookieBridge: AndroidWebLoginCookieBridge,
     storedCookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
-    onToggleBookmark: () -> Unit,
+    onToggleBookmark: (String, String) -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
     var loading by remember { mutableStateOf(true) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var currentUrl by remember(url) { mutableStateOf(url) }
+    var currentTitle by remember(url, pageTitle) { mutableStateOf(pageTitle.ifBlank { url }) }
+    var browserBookmarked by remember(url, isBookmarked) { mutableStateOf(isBookmarked) }
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
     fun updateHistory(webView: WebView) {
         canGoBack = webView.canGoBack()
         canGoForward = webView.canGoForward()
         currentUrl = webView.url ?: currentUrl
+        currentTitle = webView.title?.takeIf { it.isNotBlank() } ?: currentTitle
+    }
+    fun shareCurrentPage() {
+        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, currentTitle)
+            putExtra(Intent.EXTRA_TEXT, currentUrl)
+        }
+        context.startActivity(Intent.createChooser(sendIntent, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
     Scaffold(
         bottomBar = {
             ToolbarCard {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onClose) { Text(stringResource(R.string.done)) }
-                    Text(pageTitle.ifBlank { stringResource(R.string.browser) }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                    TextButton(onClick = onToggleBookmark) { Text(if (isBookmarked) stringResource(R.string.saved) else stringResource(R.string.bookmark)) }
+                    Text(currentTitle.ifBlank { stringResource(R.string.browser) }, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                    IconButton(onClick = {
+                        onToggleBookmark(currentUrl, currentTitle.ifBlank { currentUrl })
+                        browserBookmarked = !browserBookmarked
+                    }) {
+                        Icon(
+                            imageVector = if (browserBookmarked) FeedflowIconMap.symbol("bookmark.fill") else FeedflowIconMap.symbol("bookmark"),
+                            contentDescription = stringResource(R.string.bookmark),
+                            tint = if (browserBookmarked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    IconButton(onClick = ::shareCurrentPage) {
+                        Icon(FeedflowIconMap.symbol("square.and.arrow.up"), contentDescription = stringResource(R.string.share))
+                    }
                 }
             }
         },
