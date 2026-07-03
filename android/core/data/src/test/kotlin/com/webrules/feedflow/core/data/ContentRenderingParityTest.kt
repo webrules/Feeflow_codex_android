@@ -23,6 +23,8 @@ class ContentRenderingParityTest {
         assertTrue(ThreadRowRenderingPolicy.hidesAvatar(ForumSite.Rss))
         assertTrue(ThreadRowRenderingPolicy.hidesAvatar(ForumSite.HackerNews))
         assertFalse(ThreadRowRenderingPolicy.hidesAvatar(ForumSite.V2ex))
+        assertTrue(ThreadRowRenderingPolicy.hidesAvatar(ForumSite.Zhihu, "hot"))
+        assertFalse(ThreadRowRenderingPolicy.hidesAvatar(ForumSite.Zhihu, "recommend"))
         assertTrue(ThreadRowRenderingPolicy.hidesBadgeRow(ForumSite.Zhihu))
         assertTrue(ThreadRowRenderingPolicy.hidesBadgeRow(ForumSite.HackerNews))
         assertFalse(ThreadRowRenderingPolicy.hidesBadgeRow(ForumSite.LinuxDo))

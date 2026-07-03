@@ -99,6 +99,11 @@ final class ZhihuSearchAvatarTests: XCTestCase {
         XCTAssertFalse(ThreadListActionPolicy.supportsNotInterested(serviceId: "zhihu", communityId: "hot"))
         XCTAssertFalse(ThreadListActionPolicy.supportsNotInterested(serviceId: "v2ex", communityId: "recommend"))
     }
+
+    func testHotListHidesPlaceholderAvatarInitials() {
+        XCTAssertTrue(ThreadListActionPolicy.hidesAvatar(serviceId: "zhihu", communityId: "hot"))
+        XCTAssertFalse(ThreadListActionPolicy.hidesAvatar(serviceId: "zhihu", communityId: "recommend"))
+    }
 }
 
 final class ImageZoomClampTests: XCTestCase {

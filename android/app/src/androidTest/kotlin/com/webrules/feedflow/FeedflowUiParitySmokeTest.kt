@@ -112,6 +112,7 @@ class FeedflowUiParitySmokeTest {
             compose.onAllNodesWithContentDescription("Thread row").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText("Not interested").assertDoesNotExist()
+        compose.onNodeWithText("热").assertDoesNotExist()
 
         compose.onNodeWithContentDescription("Back").performClick()
         compose.waitUntil(timeoutMillis = 10_000) {
@@ -155,8 +156,15 @@ class FeedflowUiParitySmokeTest {
 
         override suspend fun fetchCategories(): List<Community> = communities
 
-        override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> =
-            listOf(thread.copy(community = communities.firstOrNull { it.id == categoryId } ?: community))
+        override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
+            val selectedCommunity = communities.firstOrNull { it.id == categoryId } ?: community
+            val selectedAuthor = if (site == ForumSite.Zhihu && categoryId == "hot") {
+                User("", "热榜", "")
+            } else {
+                author
+            }
+            return listOf(thread.copy(author = selectedAuthor, community = selectedCommunity))
+        }
 
         override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult =
             ThreadDetailResult(

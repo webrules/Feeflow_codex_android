@@ -2413,7 +2413,7 @@ private fun ThreadRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (!isRss && site != ForumSite.HackerNews) {
+            if (!ThreadRowRenderingPolicy.hidesAvatar(site, thread.community.id)) {
                 AvatarView(thread.author.avatar, thread.author.username, sizeDp = 40)
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
