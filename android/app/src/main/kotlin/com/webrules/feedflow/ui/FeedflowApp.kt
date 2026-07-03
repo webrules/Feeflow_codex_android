@@ -202,7 +202,12 @@ private sealed interface FeedflowRoute {
     data object DailyRssSummary : FeedflowRoute
     data object CommunityConfig : FeedflowRoute
     data object CrossSiteAi : FeedflowRoute
-    data class AiSummary(val site: ForumSite, val thread: FeedThread, val comments: List<Comment>) : FeedflowRoute
+    data class AiSummary(
+        val site: ForumSite,
+        val thread: FeedThread,
+        val comments: List<Comment>,
+        val contextThreads: List<FeedThread> = emptyList(),
+    ) : FeedflowRoute
     data class SearchResults(val site: ForumSite, val query: String) : FeedflowRoute
     data class WebLogin(val site: ForumSite) : FeedflowRoute
     data class Browser(val url: String, val title: String) : FeedflowRoute
@@ -514,7 +519,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 },
                 onBack = { route = FeedflowRoute.Threads(current.site, content.value.thread.community) },
                 onHome = { route = FeedflowRoute.SiteList },
-                onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments) },
+                onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments, current.contextThreads) },
                 onOpenBrowser = { route = FeedflowRoute.Browser(appStateController.webUrl(current.site, content.value.thread), content.value.thread.title) },
                 onOpenLink = { url, title -> route = FeedflowRoute.Browser(url, title) },
                 onOpenImage = { url -> route = FeedflowRoute.ImageViewer(url) },
@@ -610,7 +615,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             loader = appStateController,
             comments = current.comments,
             language = language,
-            onClose = { route = FeedflowRoute.SiteList },
+            onClose = { route = FeedflowRoute.Detail(current.site, current.thread, current.contextThreads) },
         )
         is FeedflowRoute.SearchResults -> SearchResultsScreen(
             site = current.site,
