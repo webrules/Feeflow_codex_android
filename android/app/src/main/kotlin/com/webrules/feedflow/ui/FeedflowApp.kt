@@ -210,7 +210,7 @@ private sealed interface FeedflowRoute {
     ) : FeedflowRoute
     data class SearchResults(val site: ForumSite, val query: String) : FeedflowRoute
     data class WebLogin(val site: ForumSite) : FeedflowRoute
-    data class Browser(val url: String, val title: String) : FeedflowRoute
+    data class Browser(val url: String, val title: String, val returnTo: FeedflowRoute = SiteList) : FeedflowRoute
     data class ImageViewer(val url: String, val returnTo: FeedflowRoute = SiteList) : FeedflowRoute
     data class NewThread(val site: ForumSite, val community: Community) : FeedflowRoute
 }
@@ -521,7 +521,13 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onHome = { route = FeedflowRoute.SiteList },
                 onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments, current.contextThreads) },
                 onOpenBrowser = { route = FeedflowRoute.Browser(appStateController.webUrl(current.site, content.value.thread), content.value.thread.title) },
-                onOpenLink = { url, title -> route = FeedflowRoute.Browser(url, title) },
+                onOpenLink = { url, title ->
+                    route = FeedflowRoute.Browser(
+                        url = url,
+                        title = title,
+                        returnTo = FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads),
+                    )
+                },
                 onOpenImage = { url ->
                     route = FeedflowRoute.ImageViewer(
                         url = url,
@@ -656,7 +662,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 if (store.isUrlBookmarked(url)) store.removeUrlBookmark(url) else store.saveUrlBookmark(url, title)
                 bookmarkRevision += 1
             },
-            onClose = { route = FeedflowRoute.SiteList },
+            onClose = { route = current.returnTo },
         )
         is FeedflowRoute.ImageViewer -> FullScreenImageScreen(url = current.url, onClose = { route = current.returnTo })
         is FeedflowRoute.NewThread -> NewThreadScreen(
