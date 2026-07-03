@@ -1150,6 +1150,13 @@ private fun ThreadDetailScreen(
                     }
                     if (canLoadMore && renderedComments.isNotEmpty()) {
                         item {
+                            LaunchedEffect(renderedComments.size) {
+                                if (!isLoadingMore) {
+                                    isLoadingMore = true
+                                    onLoadMore()
+                                    isLoadingMore = false
+                                }
+                            }
                             Button(
                                 onClick = {
                                     if (!isLoadingMore) {
