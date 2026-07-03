@@ -86,7 +86,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.filled.Tune
@@ -218,6 +220,8 @@ private object FeedflowIconMap {
         "plus.circle.fill" -> Icons.Default.AddCircle
         "sparkles" -> Icons.Default.AutoAwesome
         "chevron.left" -> Icons.Default.ArrowBack
+        "chevron.up" -> Icons.Default.KeyboardArrowUp
+        "chevron.down" -> Icons.Default.KeyboardArrowDown
         "bookmark" -> Icons.Default.BookmarkBorder
         "bookmark.fill" -> Icons.Default.Bookmark
         "safari.fill", "globe" -> Icons.Default.Public
@@ -919,24 +923,6 @@ private fun ThreadDetailScreen(
                         )
                     }
                 }
-                if (hasPrevious || hasNext) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Button(onClick = onPrevious, enabled = hasPrevious && !isLoading, modifier = Modifier.weight(1f)) {
-                            Icon(FeedflowIconMap.symbol("chevron.left"), contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(stringResource(R.string.previous_thread))
-                        }
-                        Button(onClick = onNext, enabled = hasNext && !isLoading, modifier = Modifier.weight(1f)) {
-                            Text(stringResource(R.string.next_thread))
-                            Spacer(Modifier.width(4.dp))
-                            Icon(FeedflowIconMap.symbol("chevron.right"), contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                }
                 ThreadDetailActionToolbar(
                     loadedFromCache = loadedFromCache,
                     canDelete = canDelete,
@@ -977,72 +963,84 @@ private fun ThreadDetailScreen(
             )
         }
         ForumBackground(Modifier.padding(padding)) {
-            LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { FeedflowProgressLine(isLoading) }
-                warning?.let {
-                    item { WarningCard(if (loadedFromCache) stringResource(R.string.showing_cached_thread, it) else it) }
-                }
-                actionError?.let {
-                    item { WarningCard(it) }
-                }
-                item {
-                    Column(Modifier.fillMaxWidth()) {
-                        if (site != ForumSite.Rss) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                if (site != ForumSite.HackerNews) {
-                                AvatarView(thread.author.avatar, thread.author.username, sizeDp = 38)
-                                }
-                                Column {
-                                    Text(thread.author.username, fontWeight = FontWeight.SemiBold)
-                                    thread.author.role?.let { FeedflowTag(it) }
-                                }
-                                Spacer(Modifier.weight(1f))
-                            }
-                            Spacer(Modifier.height(12.dp))
-                        }
-                        Text(thread.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(10.dp))
-                        ParsedContent(thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) }, onImageClick = onOpenImage)
-                        firstImageUrl?.let { imageUrl ->
-                            TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
-                        }
-                        if (site != ForumSite.Rss) thread.tags.orEmpty().takeIf { it.isNotEmpty() }?.let { tags ->
-                            Spacer(Modifier.height(10.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { tags.forEach { FeedflowTag(it) } }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { FeedflowProgressLine(isLoading) }
+                    warning?.let {
+                        item { WarningCard(if (loadedFromCache) stringResource(R.string.showing_cached_thread, it) else it) }
                     }
-                }
-                items(renderedComments) { comment ->
-                    Column {
-                        CommentRow(
-                            comment = comment,
-                            canReply = site.supportsCommenting,
-                            hideAvatar = site == ForumSite.HackerNews,
-                            onReply = {
-                                replyState = replyState.copy(replyingToCommentId = comment.id, replyingToUsername = comment.author.username)
-                            },
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
+                    actionError?.let {
+                        item { WarningCard(it) }
                     }
-                }
-                if (canLoadMore && renderedComments.isNotEmpty()) {
                     item {
-                        Button(
-                            onClick = {
-                                if (!isLoadingMore) {
-                                    isLoadingMore = true
-                                    scope.launch {
-                                        onLoadMore()
-                                        isLoadingMore = false
+                        Column(Modifier.fillMaxWidth()) {
+                            if (site != ForumSite.Rss) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    if (site != ForumSite.HackerNews) {
+                                        AvatarView(thread.author.avatar, thread.author.username, sizeDp = 38)
                                     }
+                                    Column {
+                                        Text(thread.author.username, fontWeight = FontWeight.SemiBold)
+                                        thread.author.role?.let { FeedflowTag(it) }
+                                    }
+                                    Spacer(Modifier.weight(1f))
                                 }
-                            },
-                            enabled = !isLoadingMore,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text(if (isLoadingMore) stringResource(R.string.loading) else stringResource(R.string.load_more_comments)) }
+                                Spacer(Modifier.height(12.dp))
+                            }
+                            Text(thread.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(10.dp))
+                            ParsedContent(thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) }, onImageClick = onOpenImage)
+                            firstImageUrl?.let { imageUrl ->
+                                TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
+                            }
+                            if (site != ForumSite.Rss) thread.tags.orEmpty().takeIf { it.isNotEmpty() }?.let { tags ->
+                                Spacer(Modifier.height(10.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { tags.forEach { FeedflowTag(it) } }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
+                        }
                     }
+                    items(renderedComments) { comment ->
+                        Column {
+                            CommentRow(
+                                comment = comment,
+                                canReply = site.supportsCommenting,
+                                hideAvatar = site == ForumSite.HackerNews,
+                                onReply = {
+                                    replyState = replyState.copy(replyingToCommentId = comment.id, replyingToUsername = comment.author.username)
+                                },
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))
+                        }
+                    }
+                    if (canLoadMore && renderedComments.isNotEmpty()) {
+                        item {
+                            Button(
+                                onClick = {
+                                    if (!isLoadingMore) {
+                                        isLoadingMore = true
+                                        scope.launch {
+                                            onLoadMore()
+                                            isLoadingMore = false
+                                        }
+                                    }
+                                },
+                                enabled = !isLoadingMore,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text(if (isLoadingMore) stringResource(R.string.loading) else stringResource(R.string.load_more_comments)) }
+                        }
+                    }
+                }
+                if (hasPrevious || hasNext) {
+                    FloatingThreadNavigationControls(
+                        hasPrevious = hasPrevious,
+                        hasNext = hasNext,
+                        enabled = !isLoading,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+                    )
                 }
             }
         }
@@ -2387,6 +2385,55 @@ private fun ThreadMetricPill(icon: String, text: String) {
     ) {
         Icon(FeedflowIconMap.symbol(icon), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
         Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun FloatingThreadNavigationControls(
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+    enabled: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        FloatingThreadNavigationButton(
+            icon = FeedflowIconMap.symbol("chevron.up"),
+            label = stringResource(R.string.previous_thread),
+            enabled = enabled && hasPrevious,
+            onClick = onPrevious,
+        )
+        FloatingThreadNavigationButton(
+            icon = FeedflowIconMap.symbol("chevron.down"),
+            label = stringResource(R.string.next_thread),
+            enabled = enabled && hasNext,
+            onClick = onNext,
+        )
+    }
+}
+
+@Composable
+private fun FloatingThreadNavigationButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(42.dp)) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 
