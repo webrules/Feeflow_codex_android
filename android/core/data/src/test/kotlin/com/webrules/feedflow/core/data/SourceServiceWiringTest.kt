@@ -99,9 +99,10 @@ class SourceServiceWiringTest {
             "https://www.4d4y.com/forum/index.php?sid=SID123" to """<a href="forumdisplay.php?fid=7&sid=SID123"><span>技术交流</span></a><a href="logging.php?action=logout">退出</a>""",
             "https://www.4d4y.com/forum/forumdisplay.php?fid=7&sid=SID123" to """
                 <tbody id="normalthread_99">
-                  <a href="viewthread.php?tid=99">GB18030 topic</a>
+                  <a href="https://www.4d4y.com/forum/viewthread.php?tid=99"><span>GB18030 topic</span></a>
                   <a href="space.php?uid=123">alice</a>
                   <td class="nums"><strong>4</strong></td>
+                  <td class="lastpost"><cite><a href="redirect.php?tid=99">2026-07-03 11:30</a></cite><em><a href="space.php?uid=456">bob</a></em></td>
                 </tbody>
             """,
             "https://www.4d4y.com/forum/viewthread.php?tid=99&page=1&sid=SID123" to """
@@ -144,6 +145,8 @@ class SourceServiceWiringTest {
         val threads = service.fetchCategoryThreads("7", categories, 1)
         assertEquals("GB18030 topic", threads.single().title)
         assertEquals(4, threads.single().commentCount)
+        assertEquals("2026-07-03 11:30", threads.single().lastPostTime)
+        assertEquals("bob", threads.single().lastPosterName)
         val detail = service.fetchThreadDetail("99", 1)
         assertEquals("4D4Y detail", detail.thread.title)
         assertTrue(detail.thread.content.contains("Original"))
