@@ -26,6 +26,9 @@ class ContentRenderingParityTest {
         assertTrue(ThreadRowRenderingPolicy.hidesBadgeRow(ForumSite.Zhihu))
         assertTrue(ThreadRowRenderingPolicy.hidesBadgeRow(ForumSite.HackerNews))
         assertFalse(ThreadRowRenderingPolicy.hidesBadgeRow(ForumSite.LinuxDo))
+        assertTrue(ThreadRowRenderingPolicy.supportsNotInterested(ForumSite.Zhihu, "recommend"))
+        assertFalse(ThreadRowRenderingPolicy.supportsNotInterested(ForumSite.Zhihu, "hot"))
+        assertFalse(ThreadRowRenderingPolicy.supportsNotInterested(ForumSite.V2ex, "recommend"))
         assertEquals("12:34", ThreadRowRenderingPolicy.normalizedLastPostTime("2026-07-02 12:34"))
         assertNull(ThreadRowRenderingPolicy.normalizedLastPostTime(""))
     }

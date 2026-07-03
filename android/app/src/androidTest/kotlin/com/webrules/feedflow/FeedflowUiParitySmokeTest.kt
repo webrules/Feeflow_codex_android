@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
 import com.webrules.feedflow.core.data.FeedflowRepository
 import com.webrules.feedflow.core.data.ForumService
 import com.webrules.feedflow.core.data.SearchResult
@@ -99,8 +101,41 @@ class FeedflowUiParitySmokeTest {
         compose.onNodeWithText("Hacker News").assertIsDisplayed()
     }
 
+    @Test fun zhihuNotInterestedRequiresRecommendationLongPress() {
+        compose.onNodeWithContentDescription("Site 知乎").performScrollTo().performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Community row").fetchSemanticsNodes().size == 2
+        }
+
+        compose.onAllNodesWithContentDescription("Community row")[1].performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Thread row").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Not interested").assertDoesNotExist()
+
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Community row").fetchSemanticsNodes().size == 2
+        }
+        compose.onAllNodesWithContentDescription("Community row")[0].performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Thread row").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Not interested").assertDoesNotExist()
+        compose.onAllNodesWithContentDescription("Thread row")[0].performTouchInput { longClick() }
+        compose.onNodeWithText("Not interested").assertIsDisplayed()
+    }
+
     private class FixtureForumService(private val site: ForumSite) : ForumService {
-        private val community = Community("topstories", "Top Stories", "Fixture top stories", "General", 12, 3)
+        private val communities = if (site == ForumSite.Zhihu) {
+            listOf(
+                Community("recommend", "Recommendations", "Fixture recommendations", "Zhihu", 12, 3),
+                Community("hot", "Hot", "Fixture hot list", "Zhihu", 12, 3),
+            )
+        } else {
+            listOf(Community("topstories", "Top Stories", "Fixture top stories", "General", 12, 3))
+        }
+        private val community = communities.first()
         private val author = User("fixture-user", "Feedflow", "person.circle")
         private val thread = FeedThread(
             id = "${site.serviceId}-thread-1",
@@ -118,7 +153,7 @@ class FeedflowUiParitySmokeTest {
         override val logo: String = site.icon
         override val requiresLogin: Boolean = false
 
-        override suspend fun fetchCategories(): List<Community> = listOf(community)
+        override suspend fun fetchCategories(): List<Community> = communities
 
         override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> =
             listOf(thread.copy(community = communities.firstOrNull { it.id == categoryId } ?: community))

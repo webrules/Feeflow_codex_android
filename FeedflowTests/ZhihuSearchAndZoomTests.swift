@@ -93,6 +93,12 @@ final class ZhihuSearchAvatarTests: XCTestCase {
 
         XCTAssertEqual(item.questionId, "456")
     }
+
+    func testNotInterestedOnlyAppearsForRecommendations() {
+        XCTAssertTrue(ThreadListActionPolicy.supportsNotInterested(serviceId: "zhihu", communityId: "recommend"))
+        XCTAssertFalse(ThreadListActionPolicy.supportsNotInterested(serviceId: "zhihu", communityId: "hot"))
+        XCTAssertFalse(ThreadListActionPolicy.supportsNotInterested(serviceId: "v2ex", communityId: "recommend"))
+    }
 }
 
 final class ImageZoomClampTests: XCTestCase {

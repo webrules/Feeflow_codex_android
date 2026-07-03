@@ -14,10 +14,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -834,6 +836,8 @@ private fun ThreadListScreen(
     onNotInterested: (FeedThread) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    var notInterestedThreadId by remember(site, community.id) { mutableStateOf<String?>(null) }
+    val supportsNotInterested = ThreadRowRenderingPolicy.supportsNotInterested(site, community.id)
     Scaffold(
         bottomBar = {
             ScreenToolbar(
@@ -890,7 +894,19 @@ private fun ThreadListScreen(
                         thread = thread,
                         site = site,
                         onClick = { onThreadClick(thread) },
-                        onNotInterested = if (site == ForumSite.Zhihu) ({ onNotInterested(thread) }) else null,
+                        onLongClick = if (supportsNotInterested) {
+                            { notInterestedThreadId = thread.id }
+                        } else {
+                            null
+                        },
+                        onNotInterested = if (supportsNotInterested && notInterestedThreadId == thread.id) {
+                            {
+                                notInterestedThreadId = null
+                                onNotInterested(thread)
+                            }
+                        } else {
+                            null
+                        },
                     )
                 }
                 if (threads.isNotEmpty() && canLoadMore) {
@@ -2363,10 +2379,12 @@ private fun CommunityRow(community: Community, onClick: () -> Unit) {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun ThreadRow(
     thread: FeedThread,
     site: ForumSite,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     onNotInterested: (() -> Unit)? = null,
 ) {
     val rowLabel = stringResource(R.string.thread_row)
@@ -2378,7 +2396,13 @@ private fun ThreadRow(
         modifier = Modifier
             .fillMaxWidth()
             .semantics { contentDescription = rowLabel }
-            .clickable(onClick = onClick),
+            .then(
+                if (onLongClick == null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                },
+            ),
         shape = RoundedCornerShape(8.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.62f)),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

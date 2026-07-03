@@ -62,7 +62,7 @@ struct ThreadListView: View {
                                             }
                                     }
                                     .buttonStyle(PlainButtonStyle())
-                                    .if(service is ZhihuService) { view in
+                                    .if(ThreadListActionPolicy.supportsNotInterested(serviceId: service.id, communityId: community.id)) { view in
                                         view.contextMenu {
                                             Button(role: .destructive) {
                                                 Task {
@@ -215,6 +215,12 @@ struct ThreadListView: View {
                     dismiss()
                 }
             }
+    }
+}
+
+enum ThreadListActionPolicy {
+    static func supportsNotInterested(serviceId: String, communityId: String) -> Bool {
+        serviceId == "zhihu" && communityId == "recommend"
     }
 }
 
