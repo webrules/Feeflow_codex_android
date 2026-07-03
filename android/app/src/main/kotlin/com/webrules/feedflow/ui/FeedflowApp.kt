@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Home
@@ -234,6 +235,7 @@ private object FeedflowIconMap {
         "square.and.pencil" -> Icons.Default.Edit
         "dot.radiowaves.left.and.right" -> Icons.Default.RssFeed
         "list.bullet.rectangle.portrait.fill" -> Icons.Default.FormatListBulleted
+        "folder.fill" -> Icons.Default.Folder
         "chevron.right" -> Icons.Default.KeyboardArrowRight
         "house.fill" -> Icons.Default.Home
         "stop.fill" -> Icons.Default.Stop
@@ -2195,19 +2197,52 @@ private fun SiteCard(site: ForumSite, modifier: Modifier = Modifier, onClick: ()
 @Composable
 private fun CommunityRow(community: Community, onClick: () -> Unit) {
     val rowLabel = stringResource(R.string.community_row)
-    ForumCard(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .semantics { contentDescription = rowLabel }
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .background(MaterialTheme.colorScheme.background),
     ) {
-        Text(community.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(community.description.ifBlank { community.category }, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            stringResource(R.string.community_activity, community.activeToday, community.onlineNow),
-            style = MaterialTheme.typography.labelMedium,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = FeedflowIconMap.symbol("folder.fill"),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(community.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                community.description.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Icon(
+                imageVector = FeedflowIconMap.symbol("chevron.right"),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f))
     }
 }
 
