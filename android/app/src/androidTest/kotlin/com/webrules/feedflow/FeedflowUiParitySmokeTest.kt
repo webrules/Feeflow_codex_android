@@ -19,6 +19,7 @@ import com.webrules.feedflow.core.model.FeedThread
 import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.model.User
 import com.webrules.feedflow.ui.FeedflowApp
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -75,6 +76,9 @@ class FeedflowUiParitySmokeTest {
         }
         compose.onAllNodesWithContentDescription("Thread row")[0].performClick()
         compose.onNodeWithText("Fixture comment.").assertIsDisplayed()
+        listOf("Share", "Speak", "Browser", "Open in browser", "Select a Community").forEach { description ->
+            assertTrue(description, compose.onAllNodesWithContentDescription(description).fetchSemanticsNodes().isNotEmpty())
+        }
         compose.onNodeWithContentDescription("AI Summary").performClick()
         compose.onNodeWithText("Failed summary").assertIsDisplayed()
     }
