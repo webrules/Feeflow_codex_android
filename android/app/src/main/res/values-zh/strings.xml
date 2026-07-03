@@ -185,4 +185,5 @@
     <string name="generated_by_gemini_language_note">由 Gemini 生成 · 朗读语言跟随当前 Feedflow 语言设置</string>
     <string name="login_to_site_format">登录 %1$s</string>
     <string name="image_transform_status">缩放：%1$sx · 旋转：%2$d°</string>
+    <string name="daily_summary_api_key_error">请先在设置中检查 API 密钥，然后生成 Gemini 每日简报。\n\n已找到 %1$d 篇可用于摘要的 RSS 文章。</string>
 </resources>

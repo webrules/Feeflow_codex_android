@@ -1510,6 +1510,7 @@ private fun DailyRssSummaryScreen(
     language: String,
     onClose: () -> Unit,
 ) {
+    val context = LocalContext.current
     var isLoading by remember { mutableStateOf(false) }
     var summary by remember { mutableStateOf("") }
     var articlesFound by remember { mutableStateOf(0) }
@@ -1531,7 +1532,7 @@ private fun DailyRssSummaryScreen(
         } else {
             summary = ""
             error = if (result.errorMessage == "check_api_key") {
-                "Check API key in Settings to generate a Gemini Daily Briefing.\n\nFound ${allThreads.size} RSS articles ready for summarization."
+                context.getString(R.string.daily_summary_api_key_error, allThreads.size)
             } else {
                 result.errorMessage
             }
