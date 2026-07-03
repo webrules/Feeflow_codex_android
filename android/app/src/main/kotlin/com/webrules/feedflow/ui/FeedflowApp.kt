@@ -582,6 +582,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             site = current.site,
             authCoordinator = authCoordinator,
             cookieBridge = cookieBridge,
+            storedCookies = store.getCookies(current.site.serviceId).orEmpty(),
             onAccepted = {
                 appStateController.setSignedIn(current.site, true)
                 homeState = appStateController.homeState
@@ -593,6 +594,11 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             url = current.url,
             pageTitle = current.title,
             isBookmarked = store.isUrlBookmarked(current.url),
+            cookieBridge = cookieBridge,
+            storedCookies = ForumSite.entries
+                .firstOrNull { site -> SiteLoginConfig.forSite(site)?.shouldCheckCookies(current.url) == true }
+                ?.let { site -> store.getCookies(site.serviceId).orEmpty() }
+                .orEmpty(),
             onToggleBookmark = {
                 if (store.isUrlBookmarked(current.url)) store.removeUrlBookmark(current.url) else store.saveUrlBookmark(current.url, current.title)
                 bookmarkRevision += 1
@@ -1748,6 +1754,7 @@ private fun WebLoginSheetScreen(
     site: ForumSite,
     authCoordinator: AuthSessionCoordinator,
     cookieBridge: AndroidWebLoginCookieBridge,
+    storedCookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
     onAccepted: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -1795,6 +1802,7 @@ private fun WebLoginSheetScreen(
                     factory = { context ->
                         WebView(context).apply {
                             cookieBridge.configure(this)
+                            config?.let { cookieBridge.installCookies(it, storedCookies) }
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     currentUrl = url
@@ -1828,6 +1836,8 @@ private fun InAppBrowserScreen(
     url: String,
     pageTitle: String,
     isBookmarked: Boolean,
+    cookieBridge: AndroidWebLoginCookieBridge,
+    storedCookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
     onToggleBookmark: () -> Unit,
     onClose: () -> Unit,
 ) {
@@ -1872,6 +1882,9 @@ private fun InAppBrowserScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 factory = { context ->
                     WebView(context).apply {
+                        SiteLoginConfig.forSite(ForumSite.entries.firstOrNull { site -> SiteLoginConfig.forSite(site)?.shouldCheckCookies(url) == true } ?: ForumSite.Rss)
+                            ?.let { cookieBridge.installCookies(it, storedCookies) }
+                        cookieBridge.configure(this)
                         webViewRef = this
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true

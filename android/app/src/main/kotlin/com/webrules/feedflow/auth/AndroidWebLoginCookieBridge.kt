@@ -45,6 +45,14 @@ class AndroidWebLoginCookieBridge(
         coordinator: AuthSessionCoordinator,
     ): LoginCaptureResult = coordinator.captureSession(site, cookiesFor(config, currentUrl))
 
+    fun installCookies(config: SiteLoginConfig, cookies: List<FeedflowCookie>) {
+        config.siteCookies(cookies).forEach { cookie ->
+            val targetUrl = "https://${cookie.domain.trimStart('.')}${cookie.path}"
+            cookieManager.setCookie(targetUrl, cookie.toSetCookieHeader())
+        }
+        cookieManager.flush()
+    }
+
     fun clearSiteCookies(config: SiteLoginConfig) {
         val existing = cookiesFor(config, config.loginUrl)
         existing.forEach { cookie ->
@@ -56,4 +64,17 @@ class AndroidWebLoginCookieBridge(
     fun flush() {
         cookieManager.flush()
     }
+
+    private fun FeedflowCookie.toSetCookieHeader(): String =
+        buildString {
+            append(name).append('=').append(value)
+            append("; Domain=").append(domain)
+            append("; Path=").append(path)
+            expiresAtMillis?.let { expiresAt ->
+                val maxAgeSeconds = ((expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+                append("; Max-Age=").append(maxAgeSeconds)
+            }
+            if (secure) append("; Secure")
+            if (httpOnly) append("; HttpOnly")
+        }
 }
