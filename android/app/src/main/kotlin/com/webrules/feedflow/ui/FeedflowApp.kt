@@ -511,6 +511,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onHome = { route = FeedflowRoute.SiteList },
                 onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments) },
                 onOpenBrowser = { route = FeedflowRoute.Browser(appStateController.webUrl(current.site, content.value.thread), content.value.thread.title) },
+                onOpenLink = { url, title -> route = FeedflowRoute.Browser(url, title) },
                 onOpenImage = { url -> route = FeedflowRoute.ImageViewer(url) },
                 onRefresh = { refreshToken += 1 },
                 onTheme = {
@@ -895,6 +896,7 @@ private fun ThreadDetailScreen(
     onHome: () -> Unit,
     onAiSummary: () -> Unit,
     onOpenBrowser: () -> Unit,
+    onOpenLink: (String, String) -> Unit,
     onOpenImage: (String) -> Unit,
     onRefresh: () -> Unit,
     onTheme: () -> Unit,
@@ -1105,7 +1107,11 @@ private fun ThreadDetailScreen(
                             }
                             Text(thread.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(10.dp))
-                            ParsedContent(thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) }, onImageClick = onOpenImage)
+                            ParsedContent(
+                                content = thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) },
+                                onImageClick = onOpenImage,
+                                onLinkClick = onOpenLink,
+                            )
                             firstImageUrl?.let { imageUrl ->
                                 TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
                             }
@@ -1123,6 +1129,7 @@ private fun ThreadDetailScreen(
                                 comment = comment,
                                 canReply = site.supportsCommenting,
                                 hideAvatar = site == ForumSite.HackerNews,
+                                onLinkClick = onOpenLink,
                                 onReply = {
                                     replyState = replyState.copy(
                                         replyingToCommentId = comment.id,
@@ -2376,11 +2383,17 @@ private fun ThreadRow(
 
 @Composable
 private fun CommentRow(comment: Comment) {
-    CommentRow(comment = comment, canReply = false, hideAvatar = false, onReply = {})
+    CommentRow(comment = comment, canReply = false, hideAvatar = false, onLinkClick = null, onReply = {})
 }
 
 @Composable
-private fun CommentRow(comment: Comment, canReply: Boolean, hideAvatar: Boolean, onReply: () -> Unit) {
+private fun CommentRow(
+    comment: Comment,
+    canReply: Boolean,
+    hideAvatar: Boolean,
+    onLinkClick: ((String, String) -> Unit)? = null,
+    onReply: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -2399,7 +2412,7 @@ private fun CommentRow(comment: Comment, canReply: Boolean, hideAvatar: Boolean,
                 Spacer(Modifier.weight(1f))
                 Text(comment.timeAgo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            ParsedContent(comment.content)
+            ParsedContent(comment.content, onLinkClick = onLinkClick)
             if (comment.likeCount > 0) ThreadMetricPill(icon = "hand.thumbsup", text = "${comment.likeCount}")
         }
     }
@@ -3158,11 +3171,15 @@ private fun FeedflowProgressLine(visible: Boolean) {
 }
 
 @Composable
-private fun ParsedContent(content: String, onImageClick: ((String) -> Unit)? = null) {
+private fun ParsedContent(
+    content: String,
+    onImageClick: ((String) -> Unit)? = null,
+    onLinkClick: ((String, String) -> Unit)? = null,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FeedflowContentRenderer.parseBlocks(content).forEach { block ->
             when (block) {
-                is ContentBlock.Text -> LinkedText(block.segments)
+                is ContentBlock.Text -> LinkedText(block.segments, onLinkClick)
                 is ContentBlock.Quote -> Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3172,7 +3189,7 @@ private fun ParsedContent(content: String, onImageClick: ((String) -> Unit)? = n
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.size(width = 3.dp, height = 42.dp).background(MaterialTheme.colorScheme.outline))
-                        LinkedText(block.segments)
+                        LinkedText(block.segments, onLinkClick)
                     }
                 }
                 is ContentBlock.Image -> coil.compose.AsyncImage(
@@ -3190,14 +3207,21 @@ private fun ParsedContent(content: String, onImageClick: ((String) -> Unit)? = n
 }
 
 @Composable
-private fun LinkedText(segments: List<LinkSegment>) {
+private fun LinkedText(segments: List<LinkSegment>, onLinkClick: ((String, String) -> Unit)? = null) {
     val single = segments.singleOrNull() as? LinkSegment.Link
     if (single != null) {
-        ForumCard {
+        ForumCard(
+            modifier = if (onLinkClick != null) {
+                Modifier.fillMaxWidth().clickable { onLinkClick(single.url, single.title) }
+            } else {
+                Modifier.fillMaxWidth()
+            },
+        ) {
             Text(single.title, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             Text(single.url, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     } else {
+        val firstLink = segments.firstNotNullOfOrNull { it as? LinkSegment.Link }
         Text(
             segments.joinToString("") { segment ->
                 when (segment) {
@@ -3205,7 +3229,13 @@ private fun LinkedText(segments: List<LinkSegment>) {
                     is LinkSegment.Link -> segment.title
                 }
             },
+            modifier = if (firstLink != null && onLinkClick != null) {
+                Modifier.clickable { onLinkClick(firstLink.url, firstLink.title) }
+            } else {
+                Modifier
+            },
             style = MaterialTheme.typography.bodyMedium,
+            color = if (firstLink != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         )
     }
 }
