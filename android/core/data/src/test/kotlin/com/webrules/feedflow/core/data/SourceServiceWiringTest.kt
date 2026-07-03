@@ -351,6 +351,61 @@ class SourceServiceWiringTest {
         assertTrue(detail.comments[1].content.contains("哈，你以为零利率就是存贷都是零？"))
     }
 
+    @Test fun fourD4YServiceParsesDesktopThreadDetailLikeIos() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
+        val service = FourD4YService(
+            store = store,
+            httpClient = SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/viewthread.php?tid=901&page=1" to """
+                    <html>
+                    <head>
+                      <title>Desktop protected topic - Category - 4D4Y</title>
+                      <script>var fid = parseInt('35'), tid = parseInt('901')</script>
+                    </head>
+                    <body>
+                      <div class="pages"><a>1</a><a>2</a></div>
+                      <table>
+                        <tr>
+                          <td class="postauthor">
+                            <div class="postinfo"><a href="space.php?uid=111">alice</a></div>
+                          </td>
+                          <td class="t_msgfont" id="postmessage_501">
+                            Original desktop<br />
+                            post <img src="https://cdn.example.com/original.jpg" />
+                          </td>
+                        </tr>
+                        <tr>
+                          <td class="postauthor">
+                            <div class="postinfo"><a href="space.php?uid=222">bob</a></div>
+                          </td>
+                          <td id="postmessage_502" class="t_msgfont">
+                            Reply desktop<br />content
+                          </td>
+                        </tr>
+                      </table>
+                    </body>
+                    </html>
+                """.trimIndent(),
+            ),
+        )
+
+        val detail = service.fetchThreadDetail("901", 1)
+
+        assertEquals("Desktop protected topic", detail.thread.title)
+        assertEquals("35", detail.thread.community.id)
+        assertEquals("111", detail.thread.author.id)
+        assertEquals("alice", detail.thread.author.username)
+        assertTrue(detail.thread.content.contains("Original desktop"))
+        assertTrue(detail.thread.content.contains("[IMAGE:https://cdn.example.com/original.jpg]"))
+        assertEquals(1, detail.thread.commentCount)
+        assertEquals(2, detail.totalPages)
+        assertEquals("502", detail.comments.single().id)
+        assertEquals("222", detail.comments.single().author.id)
+        assertEquals("bob", detail.comments.single().author.username)
+        assertTrue(detail.comments.single().content.contains("Reply desktop"))
+    }
+
     @Test fun zhihuServiceExposesRecommendationAndHotCategories() = runBlocking {
         val categories = ZhihuService().fetchCategories()
         assertEquals(listOf("recommend", "hot"), categories.map { it.id })

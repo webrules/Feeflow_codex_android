@@ -630,8 +630,40 @@ class FourD4YService(
         store?.getSetting("detected_4d4y_username")?.equals(thread.author.username, ignoreCase = true) == true
 
     fun parseThreadDetailHtml(html: String, threadId: String, page: Int): Triple<FeedThread, List<Comment>, Int?>? {
-        val title = Regex("""<h2><a[^>]*>(.*?)</h2>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            .find(html)?.groupValues?.get(1)?.stripTags()?.decodeHtmlEntities() ?: return null
+        val title = extractThreadDetailTitle(html)
+        val desktopPosts = extractDesktopThreadDetailPosts(html)
+        if (desktopPosts.isNotEmpty()) {
+            val community = Community(
+                id = extractThreadDetailFid(html, threadId),
+                name = "",
+                description = "",
+                category = "",
+                activeToday = 0,
+                onlineNow = 0,
+            )
+            val commentPosts = if (page == 1) desktopPosts.drop(1) else desktopPosts
+            val mainPost = desktopPosts.first()
+            val thread = FeedThread(
+                id = threadId,
+                title = title,
+                content = if (page == 1) cleanContent(mainPost.rawContent) else "",
+                author = if (page == 1) mainPost.author else User("0", "", ""),
+                community = community,
+                timeAgo = if (page == 1) mainPost.timeAgo else "",
+                likeCount = 0,
+                commentCount = if (page == 1) commentPosts.size else 0,
+            )
+            val comments = commentPosts.map { post ->
+                Comment(
+                    id = post.id,
+                    author = post.author,
+                    content = cleanContent(post.rawContent),
+                    timeAgo = post.timeAgo,
+                    likeCount = 0,
+                )
+            }
+            return Triple(thread, comments, extractThreadDetailTotalPages(html))
+        }
         val authorMatch = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>.*?发表于\s*([^<]+)</em>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(html)
         val communityMatch = Regex("""forumdisplay\.php\?fid=(\d+)[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(html)
         val rawContent = extractDetailContent(html)
@@ -674,6 +706,137 @@ class FourD4YService(
             commentCount = if (page == 1) comments.size else 0,
         )
         return Triple(thread, comments, totalPages)
+    }
+
+    private data class FourD4YDetailPost(
+        val id: String,
+        val author: User,
+        val rawContent: String,
+        val timeAgo: String,
+    )
+
+    private fun extractDesktopThreadDetailPosts(html: String): List<FourD4YDetailPost> {
+        val authors = extractDesktopPostAuthors(html)
+        return postContentMatches(html).mapIndexedNotNull { index, match ->
+            val pid = match.groupValues.getOrNull(1).orEmpty()
+            val content = match.groupValues.getOrNull(2).orEmpty()
+            if (pid.isBlank() || content.isBlank()) return@mapIndexedNotNull null
+            FourD4YDetailPost(
+                id = pid,
+                author = authors.getOrElse(index) { User("0", "User", "person.circle") },
+                rawContent = content,
+                timeAgo = "",
+            )
+        }
+    }
+
+    private fun postContentMatches(html: String): List<MatchResult> {
+        val options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        val patterns = listOf(
+            """class=["']t_msgfont["'][^>]*id=["']postmessage_(\d+)["'][^>]*>(.*?)</td>""",
+            """id=["']postmessage_(\d+)["'][^>]*class=["']t_msgfont["'][^>]*>(.*?)</td>""",
+            """<td[^>]*id=["']postmessage_(\d+)["'][^>]*>(.*?)</td>""",
+            """<div[^>]*id=["']postmessage_(\d+)["'][^>]*>(.*?)</div>""",
+        )
+        return patterns
+            .flatMap { pattern -> Regex(pattern, options).findAll(html).toList() }
+            .sortedBy { it.range.first }
+            .distinctBy { it.groupValues[1] }
+    }
+
+    private fun extractDesktopPostAuthors(html: String): List<User> {
+        val authorBlocks = Regex("""<td[^>]*class=["']postauthor["'][^>]*>(.*?)</td>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .findAll(html)
+            .map { it.groupValues[1] }
+            .toList()
+        val blockUsers = authorBlocks.mapNotNull(::extractDesktopPostAuthor)
+        if (blockUsers.isNotEmpty()) return blockUsers
+        return Regex("""class=["']postauthor["'][^>]*>.*?class=["']postinfo["'][^>]*>.*?<a[^>]*>([^<]+)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .findAll(html)
+            .map {
+                val username = it.groupValues[1].decodeHtmlEntities().trim()
+                User(username, username.ifBlank { "User" }, "person.circle")
+            }
+            .toList()
+    }
+
+    private fun extractDesktopPostAuthor(block: String): User? {
+        val username = listOf(
+            """class=["']postinfo["'][^>]*>.*?<a[^>]*>([^<]+)</a>""",
+            """<a[^>]+href=["']space\.php\?uid=\d+[^"']*["'][^>]*>([^<]+)</a>""",
+            """<a[^>]+href=["']member\.php[^"']*["'][^>]*>([^<]+)</a>""",
+        ).firstNotNullOfOrNull { pattern ->
+            Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .find(block)
+                ?.groupValues
+                ?.get(1)
+                ?.stripTags()
+                ?.decodeHtmlEntities()
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+        } ?: return null
+        val uid = Regex("""(?:space|member)\.php\?[^"'>]*(?:[?&])?uid=(\d+)""", RegexOption.IGNORE_CASE)
+            .find(block.decodeHtmlEntities())
+            ?.groupValues
+            ?.get(1)
+            .orEmpty()
+        return User(
+            id = uid.ifBlank { username },
+            username = username,
+            avatar = if (uid.isNotBlank()) avatarUrlForUid(uid) else "person.circle",
+        )
+    }
+
+    private fun extractThreadDetailTitle(html: String): String {
+        val title = listOf(
+            """<div[^>]*class=["'][^"']*\bdetail\b[^"']*["'][^>]*>.*?<h2[^>]*>\s*(?:<a[^>]*>)?\s*(.*?)\s*</h2>""",
+            """<h1[^>]*>\s*(?:<a[^>]*>)?\s*(.*?)\s*</h1>""",
+            """<title>\s*(.*?)\s*</title>""",
+            """<h2[^>]*>\s*(?:<a[^>]*>)?\s*(.*?)\s*</h2>""",
+        ).firstNotNullOfOrNull { pattern ->
+            Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .find(html)
+                ?.groupValues
+                ?.get(1)
+                ?.stripTags()
+                ?.decodeHtmlEntities()
+                ?.replace(Regex("""\s+"""), " ")
+                ?.trim()
+                ?.substringBefore(" - ")
+                ?.takeIf { it.isNotBlank() }
+        }
+        return title ?: "Unknown Topic"
+    }
+
+    private fun extractThreadDetailFid(html: String, threadId: String): String {
+        val decoded = html.decodeHtmlEntities()
+        val escapedThreadId = Regex.escape(threadId)
+        return listOf(
+            """\bfid\s*=\s*parseInt\(['"](\d+)['"]\)""",
+            """post\.php\?action=reply[^"']*[?&]fid=(\d+)[^"']*[?&]tid=$escapedThreadId""",
+            """class=["'][^"']*current[^"']*["'][^>]*>\s*<a[^>]+href=["']forumdisplay\.php\?fid=(\d+)""",
+            """forumdisplay\.php\?fid=(\d+)""",
+        ).firstNotNullOfOrNull { pattern ->
+            Regex(pattern, RegexOption.IGNORE_CASE).find(decoded)?.groupValues?.get(1)
+        } ?: "0"
+    }
+
+    private fun extractThreadDetailTotalPages(html: String): Int? {
+        val candidates = mutableListOf<Int>()
+        Regex("""<div[^>]*class=["']pages["'][^>]*>(.*?)</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .find(html)
+            ?.groupValues
+            ?.get(1)
+            ?.let { pages ->
+                candidates += Regex("""(?:>|\s)(\d+)(?:<|\s)""").findAll(pages).mapNotNull { it.groupValues[1].toIntOrNull() }.toList()
+            }
+        Regex("""<div[^>]*class=["'][^"']*seclist[^"']*["'][^>]*>.*?\d+\s*/\s*(\d+)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .find(html)
+            ?.groupValues
+            ?.get(1)
+            ?.toIntOrNull()
+            ?.let { candidates += it }
+        return candidates.maxOrNull()
     }
 
     companion object {
