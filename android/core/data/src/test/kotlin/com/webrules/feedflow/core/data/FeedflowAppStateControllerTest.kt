@@ -110,6 +110,48 @@ class FeedflowAppStateControllerTest {
         assertTrue(loaded.value.hasMore)
     }
 
+    @Test fun refreshDetailPreservesRicherListAuthorMetadata() = runBlocking {
+        val community = Community("latest", "Latest", "", "General", 0, 0)
+        val listThread = FeedThread(
+            id = "topic-1",
+            title = "List title",
+            content = "list",
+            author = User("list-author", "List Author", "https://example.com/avatar.png", "member"),
+            community = community,
+            timeAgo = "1h",
+            likeCount = 1,
+            commentCount = 2,
+            isLiked = true,
+            lastPostTime = "2026-07-03 10:00",
+            lastPosterName = "Last",
+        )
+        val detailThread = listThread.copy(
+            title = "Detail title",
+            content = "detail",
+            author = User("", "Unknown", "person.circle", null),
+            community = Community("fresh", "Fresh", "", "Other", 0, 0),
+            isLiked = false,
+            lastPostTime = null,
+            lastPosterName = null,
+        )
+        val controller = FeedflowAppStateController(
+            FeedflowRepository(
+                serviceFactory = { DetailService(detailThread) },
+            ),
+        )
+
+        val loaded = controller.refreshDetail(ForumSite.V2ex, listThread)
+
+        assertEquals("Detail title", loaded.value.thread.title)
+        assertEquals("List Author", loaded.value.thread.author.username)
+        assertEquals("https://example.com/avatar.png", loaded.value.thread.author.avatar)
+        assertEquals("member", loaded.value.thread.author.role)
+        assertEquals(community, loaded.value.thread.community)
+        assertTrue(loaded.value.thread.isLiked)
+        assertEquals("2026-07-03 10:00", loaded.value.thread.lastPostTime)
+        assertEquals("Last", loaded.value.thread.lastPosterName)
+    }
+
     @Test fun createThreadAndReplyDelegateToService() = runBlocking {
         val service = PostingService()
         val community = Community("general", "General", "", "v2ex", 0, 0)
@@ -179,6 +221,15 @@ class FeedflowAppStateControllerTest {
         override val logo = "list.bullet"
         override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> =
             pages[page].orEmpty()
+        override fun getWebUrl(thread: FeedThread): String = thread.id
+    }
+
+    private class DetailService(private val detailThread: FeedThread) : StaticForumService() {
+        override val name = "Detail"
+        override val id = "detail"
+        override val logo = "doc.text"
+        override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult =
+            ThreadDetailResult(detailThread, emptyList(), totalPages = 1)
         override fun getWebUrl(thread: FeedThread): String = thread.id
     }
 

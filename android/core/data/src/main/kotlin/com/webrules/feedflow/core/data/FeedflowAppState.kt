@@ -99,7 +99,9 @@ class FeedflowAppStateController(
     suspend fun refreshDetail(site: ForumSite, thread: FeedThread, page: Int = 1): LoadableContent<ThreadDetailContent> {
         val result = repository.loadThreadDetail(site, thread, page)
         return contentFromResult(
-            result = result.map { (freshThread, comments) -> ThreadDetailContent(freshThread, comments) },
+            result = result.map { (freshThread, comments) ->
+                ThreadDetailContent(mergeDetailThread(freshThread, current = thread), comments)
+            },
             fallback = ThreadDetailContent(thread, emptyList()),
         ).also { detailCache[detailKey(site, thread)] = it }
     }
@@ -182,4 +184,29 @@ class FeedflowAppStateController(
     private fun threadKey(site: ForumSite, community: Community): String = "${site.serviceId}:${community.id}"
 
     private fun detailKey(site: ForumSite, thread: FeedThread): String = "${site.serviceId}:${thread.id}"
+
+    private fun mergeDetailThread(fresh: FeedThread, current: FeedThread): FeedThread {
+        val currentAuthor = current.author
+        val freshAuthor = fresh.author
+        val resolvedAuthor = if (
+            AvatarRenderingPolicy.shouldUseFallback(freshAuthor.avatar) &&
+            !AvatarRenderingPolicy.shouldUseFallback(currentAuthor.avatar)
+        ) {
+            freshAuthor.copy(
+                id = freshAuthor.id.ifBlank { currentAuthor.id },
+                username = freshAuthor.username.takeUnless { it.isBlank() || it == "Unknown" } ?: currentAuthor.username,
+                avatar = currentAuthor.avatar,
+                role = freshAuthor.role ?: currentAuthor.role,
+            )
+        } else {
+            freshAuthor
+        }
+        return fresh.copy(
+            author = resolvedAuthor,
+            community = current.community,
+            isLiked = current.isLiked,
+            lastPostTime = current.lastPostTime,
+            lastPosterName = current.lastPosterName,
+        )
+    }
 }
