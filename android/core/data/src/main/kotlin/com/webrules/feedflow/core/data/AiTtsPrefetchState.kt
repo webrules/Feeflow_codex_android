@@ -166,6 +166,17 @@ data class SpeechPlaybackState(
     fun stop(): SpeechPlaybackState = copy(isSpeaking = false, spokenText = "")
 }
 
+data class SpeechSynthesisConfig(
+    val voiceLanguageTag: String,
+    val speechRate: Float = 0.5f,
+    val pitch: Float = 1.0f,
+) {
+    companion object {
+        fun forLanguage(language: String): SpeechSynthesisConfig =
+            SpeechSynthesisConfig(voiceLanguageTag = if (language == "zh") "zh-CN" else "en-US")
+    }
+}
+
 data class PrefetchDecisionInput(
     val enabled: Boolean,
     val isWifi: Boolean,

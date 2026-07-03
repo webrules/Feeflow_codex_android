@@ -181,4 +181,6 @@
     <string name="home">首页</string>
     <string name="community_activity">今日活跃 %1$d · 在线 %2$d</string>
     <string name="avatar_for">%1$s 头像</string>
+    <string name="speaking_in_language">正在朗读：%1$s</string>
+    <string name="generated_by_gemini_language_note">由 Gemini 生成 · 朗读语言跟随当前 Feedflow 语言设置</string>
 </resources>

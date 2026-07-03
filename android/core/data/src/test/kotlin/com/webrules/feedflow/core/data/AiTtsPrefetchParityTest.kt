@@ -90,6 +90,16 @@ class AiTtsPrefetchParityTest {
         assertFalse(speaking.stop().isSpeaking)
     }
 
+    @Test fun speechSynthesisConfigMatchesIosVoiceAndUtteranceDefaults() {
+        val zh = SpeechSynthesisConfig.forLanguage("zh")
+        val en = SpeechSynthesisConfig.forLanguage("en")
+
+        assertEquals("zh-CN", zh.voiceLanguageTag)
+        assertEquals("en-US", en.voiceLanguageTag)
+        assertEquals(0.5f, zh.speechRate)
+        assertEquals(1.0f, zh.pitch)
+    }
+
     @Test fun prefetchGateMatchesPreferenceNetworkSourceCacheAndQueueRules() {
         val base = PrefetchDecisionInput(enabled = true, isWifi = true, site = ForumSite.V2ex, detailCached = false, queueSize = 0)
         assertTrue(PrefetchGate.shouldPrefetch(base))
