@@ -610,14 +610,17 @@ class FourD4YService(
         val authorMatch = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>.*?发表于\s*([^<]+)</em>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(html)
         val communityMatch = Regex("""forumdisplay\.php\?fid=(\d+)[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(html)
         val rawContent = extractDetailContent(html)
-        val comments = Regex("""<li id="pid(\d+)">.*?space\.php\?uid=(\d+)[^>]*>([^<]+)</a>/\s*([^<]+)</div>\s*<div class="replycon">(.*?)</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val comments = Regex("""<li[^>]*id=["']pid(\d+)["'][^>]*>(.*?)</li>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .findAll(html)
-            .map {
+            .mapNotNull {
+                val block = it.groupValues[2]
+                val author = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>/\s*([^<]+?)(?:</div>|$)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    .find(block) ?: return@mapNotNull null
                 Comment(
                     id = it.groupValues[1],
-                    author = User(it.groupValues[2], it.groupValues[3].decodeHtmlEntities(), avatarUrlForUid(it.groupValues[2])),
-                    content = cleanContent(it.groupValues[5]),
-                    timeAgo = it.groupValues[4].trim(),
+                    author = User(author.groupValues[1], author.groupValues[2].decodeHtmlEntities(), avatarUrlForUid(author.groupValues[1])),
+                    content = cleanContent(extractReplyContent(block)),
+                    timeAgo = author.groupValues[3].trim(),
                     likeCount = 0,
                 )
             }.toList()
@@ -684,12 +687,20 @@ class FourD4YService(
             val startMatch = Regex("""<div[^>]*class=["'][^"']*detailcon[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE).find(html)
                 ?: return ""
             val contentStart = startMatch.range.last + 1
-            val end = Regex("""<li\s+id=["']?pid\d+|<div[^>]*class=["'][^"']*replylist|</body>""", RegexOption.IGNORE_CASE)
+            val end = Regex("""<div[^>]*class=["'][^"']*detailbtn|<li\s+id=["']?pid\d+|<div[^>]*class=["'][^"']*replylist|</body>""", RegexOption.IGNORE_CASE)
                 .find(html, contentStart)
                 ?.range
                 ?.first
                 ?: html.length
             return html.substring(contentStart, end)
+        }
+
+        private fun extractReplyContent(block: String): String {
+            val startMatch = Regex("""<div[^>]*class=["'][^"']*replycon[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE).find(block)
+                ?: return ""
+            val contentStart = startMatch.range.last + 1
+            val end = block.lastIndexOf("</div>").takeIf { it > contentStart } ?: block.length
+            return block.substring(contentStart, end)
         }
     }
 }
