@@ -130,7 +130,7 @@ class SourceServiceWiringTest {
             "https://www.4d4y.com/forum/forumdisplay.php?fid=7&sid=SID123" to """
                 <tbody id="normalthread_99">
                   <a href="https://www.4d4y.com/forum/viewthread.php?tid=99"><span>GB18030 topic</span></a>
-                  <a href="space.php?uid=123">alice</a>
+                  <td class="author"><cite><a href="space.php?action=viewpro&amp;uid=123">alice</a></cite><em>2026-07-03 10:00</em></td>
                   <td class="nums"><strong>4</strong></td>
                   <td class="lastpost"><cite><a href="redirect.php?tid=99">2026-07-03 11:30</a></cite><em><a href="space.php?uid=456">bob</a></em></td>
                 </tbody>
@@ -160,9 +160,20 @@ class SourceServiceWiringTest {
                 <div id="authorposton456"></div>
             """,
             "https://www.4d4y.com/forum/search.php?searchsubmit=yes&srchtxt=android+parity&searchfield=all&page=1&sid=SID123" to """
-                <a href="viewthread.php?tid=501&sid=SID123"><span>Android parity result</span></a>
-                <a href="viewthread.php?tid=501&sid=SID123">Android parity result duplicate</a>
-                <a href="viewthread.php?tid=502&sid=SID123">Second result</a>
+                <table class="datatable">
+                  <tbody><tr>
+                    <th class="subject"><a href="viewthread.php?tid=501&sid=SID123"><span>Android parity result</span></a></th>
+                    <td class="author"><cite><a href="space.php?uid=504383">iamez</a></cite><em>2026-07-03 10:00</em></td>
+                  </tr></tbody>
+                  <tbody><tr>
+                    <th class="subject"><a href="viewthread.php?tid=501&sid=SID123">Android parity result duplicate</a></th>
+                    <td class="author"><cite><a href="space.php?uid=504383">iamez</a></cite><em>2026-07-03 10:00</em></td>
+                  </tr></tbody>
+                  <tbody><tr>
+                    <th class="subject"><a href="viewthread.php?tid=502&sid=SID123">Second result</a></th>
+                    <td class="author"><cite><a href="space-uid-737271.html">跳跳猪</a></cite><em>2026-07-03 11:00</em></td>
+                  </tr></tbody>
+                </table>
             """,
             "https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&sid=SID123" to """
                 <input type="hidden" name="formhash" value="ijkl9012">
@@ -180,12 +191,21 @@ class SourceServiceWiringTest {
         assertEquals("技术交流", categories.single().name)
         val threads = service.fetchCategoryThreads("7", categories, 1)
         assertEquals("GB18030 topic", threads.single().title)
+        assertEquals("123", threads.single().author.id)
+        assertEquals("alice", threads.single().author.username)
+        assertTrue(threads.single().author.avatar.endsWith("/000/00/01/23_avatar_middle.jpg"))
         assertEquals(4, threads.single().commentCount)
         assertEquals("2026-07-03 11:30", threads.single().lastPostTime)
         assertEquals("bob", threads.single().lastPosterName)
         val search = service.searchThreads("android parity", 1)
         assertEquals(listOf("501", "502"), search.threads.map { it.id })
         assertEquals("Android parity result", search.threads.first().title)
+        assertEquals("504383", search.threads.first().author.id)
+        assertEquals("iamez", search.threads.first().author.username)
+        assertTrue(search.threads.first().author.avatar.endsWith("/000/50/43/83_avatar_middle.jpg"))
+        assertEquals("737271", search.threads.last().author.id)
+        assertEquals("跳跳猪", search.threads.last().author.username)
+        assertTrue(search.threads.last().author.avatar.endsWith("/000/73/72/71_avatar_middle.jpg"))
         assertTrue(!search.hasMore)
         val detail = service.fetchThreadDetail("99", 1)
         assertEquals("4D4Y detail", detail.thread.title)

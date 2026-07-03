@@ -347,11 +347,25 @@ class RemainingSourceParserParityTest {
         val categories = FourD4YParser.parseCategories("""<a href="forumdisplay.php?fid=2">Discovery</a><a href="forumdisplay.php?fid=7">交易</a>""")
         assertEquals(listOf("2", "7"), categories.map { it.id })
         val rows = FourD4YParser.parseThreadRows(
-            """<tbody id="normalthread_42"><a href="viewthread.php?tid=42">标题&amp;A</a><td class="author"><a href="space.php?uid=12345">joe</a></td><td class="nums"><strong>9</strong></td></tbody>""",
+            """<tbody id="normalthread_42"><a href="viewthread.php?tid=42">标题&amp;A</a><td class="author"><a href="space.php?action=viewpro&amp;uid=12345">joe</a></td><td class="nums"><strong>9</strong></td></tbody>""",
             categories.first(),
         )
         assertEquals("标题&A", rows.single().title)
+        assertEquals("12345", rows.single().author.id)
+        assertEquals("joe", rows.single().author.username)
+        assertTrue(rows.single().author.avatar.endsWith("/000/01/23/45_avatar_middle.jpg"))
         assertEquals(9, rows.single().commentCount)
+        val searchRows = FourD4YParser.parseSearchThreads(
+            """
+                <ul>
+                  <li><a href="viewthread.php?tid=51">搜索结果一</a><p class="author"><a href="space.php?action=viewpro&amp;uid=504383">iamez</a> / 今天</p></li>
+                  <li><a href="viewthread.php?tid=52">搜索结果二</a><p class="by"><a href="space-uid-737271.html">跳跳猪</a> / 今天</p></li>
+                </ul>
+            """,
+        )
+        assertEquals(listOf("iamez", "跳跳猪"), searchRows.map { it.author.username })
+        assertEquals(listOf("504383", "737271"), searchRows.map { it.author.id })
+        assertTrue(searchRows.all { it.author.avatar.startsWith("https://img02.4d4y.com/") })
         val cleaned = FourD4YParser.cleanContent("""<blockquote>quote</blockquote><a href="https://x">X</a><img src="https://img/a.jpg">""")
         assertTrue(cleaned.contains("[QUOTE]quote[/QUOTE]"))
         assertTrue(cleaned.contains("[LINK:https://x|X]"))

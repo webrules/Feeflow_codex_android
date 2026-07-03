@@ -589,15 +589,24 @@ object HackerNewsContentCleaner {
                 .mapNotNull { match ->
                     val title = match.groupValues[2].cleanThreadListTitle()
                     if (title.isBlank()) return@mapNotNull null
+                    val context = html.surroundingThreadListBlock(match.range)
+                    val author = extractThreadListAuthor(context)
+                    val authorId = author?.first.orEmpty()
                     FeedThread(
                         id = match.groupValues[1],
                         title = title,
                         content = "",
-                        author = User("", "Unknown", "person.circle"),
+                        author = User(
+                            id = authorId,
+                            username = author?.second ?: "Unknown",
+                            avatar = extractThreadListAvatar(context, authorId),
+                        ),
                         community = community,
-                        timeAgo = "",
+                        timeAgo = extractThreadListCreatedTime(context),
                         likeCount = 0,
-                        commentCount = 0,
+                        commentCount = extractThreadListReplyCount(context),
+                        lastPostTime = extractThreadListLastPostTime(context),
+                        lastPosterName = extractThreadListLastPoster(context),
                     )
                 }
                 .distinctBy { it.id }
@@ -643,10 +652,37 @@ object HackerNewsContentCleaner {
                 .trim()
 
         private fun extractThreadListAuthor(context: String): Pair<String, String>? {
+            val options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+            val authorScope = listOf(
+                """<td[^>]*class=["'][^"']*\bauthor\b[^"']*["'][^>]*>(.*?)</td>""",
+                """<(?:p|div)[^>]*class=["'][^"']*(?:\bauthor\b|\bby\b)[^"']*["'][^>]*>(.*?)</(?:p|div)>""",
+            ).firstNotNullOfOrNull { pattern ->
+                Regex(pattern, options).find(context)?.groupValues?.get(1)
+            } ?: context
+
+            val profileLink = Regex(
+                """<a\b[^>]*href=["']([^"']*(?:space(?:\.php|-)|member\.php|profile-)[^"']*)["'][^>]*>(.*?)</a>""",
+                options,
+            ).findAll(authorScope).firstNotNullOfOrNull { match ->
+                val href = match.groupValues[1].decodeHtmlEntities()
+                val name = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
+                if (name.isBlank()) return@firstNotNullOfOrNull null
+                val uid = listOf(
+                    """(?:^|[?&])uid=(\d+)""",
+                    """(?:space|profile)-uid-(\d+)""",
+                    """space-(\d+)-""",
+                    """uid-(\d+)""",
+                ).firstNotNullOfOrNull { pattern ->
+                    Regex(pattern, RegexOption.IGNORE_CASE).find(href)?.groupValues?.get(1)
+                }
+                (uid ?: name) to name
+            }
+            if (profileLink != null) return profileLink
+
             val uidMatch = Regex(
-                """space\.php\?uid=(\d+)[^>]*>(.*?)</a>""",
+                """(?:^|[?&])uid=(\d+)[^>]*>(.*?)</a>""",
                 setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
-            ).find(context)
+            ).find(authorScope.decodeHtmlEntities())
             if (uidMatch != null) {
                 val name = uidMatch.groupValues[2].stripTags().decodeHtmlEntities().trim()
                 if (name.isNotBlank()) return uidMatch.groupValues[1] to name
@@ -655,8 +691,8 @@ object HackerNewsContentCleaner {
                 """class=["'][^"']*author[^"']*["'][^>]*>\s*<a[^>]*>([^<]+)</a>""",
                 """class=["'][^"']*by[^"']*["'][^>]*>\s*<a[^>]*>([^<]+)</a>""",
             ).firstNotNullOfOrNull { pattern ->
-                Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                    .find(context)
+                Regex(pattern, options)
+                    .find(authorScope)
                     ?.groupValues
                     ?.get(1)
                     ?.stripTags()
@@ -692,7 +728,8 @@ object HackerNewsContentCleaner {
         private fun String.surroundingThreadListBlock(range: IntRange): String {
             val before = substring(0, range.first.coerceIn(0, length))
             val after = substring(range.last.coerceIn(0, length - 1) + 1)
-            val start = listOf("<tr", "<li", "<tbody")
+            val containers = listOf("<tr", "<li", "<tbody")
+            val start = containers
                 .mapNotNull { before.lastIndexOf(it, ignoreCase = true).takeIf { index -> index >= 0 } }
                 .maxOrNull()
                 ?: (range.first - 800).coerceAtLeast(0)
