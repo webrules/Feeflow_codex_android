@@ -963,14 +963,6 @@ private fun ThreadDetailScreen(
         }
         context.startActivity(android.content.Intent.createChooser(sendIntent, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
-    fun openExternal() {
-        runCatching {
-            context.startActivity(
-                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(webUrl))
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
-    }
     val firstImageUrl = remember(thread.content, renderedComments) {
         firstImageUrl(thread.content + "\n" + renderedComments.joinToString("\n") { it.content })
     }
@@ -1067,10 +1059,8 @@ private fun ThreadDetailScreen(
                     onRefresh = onRefresh,
                     onToggleBookmark = onToggleBookmark,
                     onAiSummary = onAiSummary,
-                    onOpenBrowser = onOpenBrowser,
                     onSpeak = ::toggleSpeech,
                     onShare = ::shareThread,
-                    onOpenExternal = ::openExternal,
                     onTheme = onTheme,
                     onDelete = { showingDeleteConfirmation = true },
                 )
@@ -2737,20 +2727,29 @@ private fun ThreadDetailActionToolbar(
     onRefresh: () -> Unit,
     onToggleBookmark: () -> Unit,
     onAiSummary: () -> Unit,
-    onOpenBrowser: () -> Unit,
     onSpeak: () -> Unit,
     onShare: () -> Unit,
-    onOpenExternal: () -> Unit,
     onTheme: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    ToolbarCard {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .border(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.10f),
+            )
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
+        Spacer(Modifier.weight(1f))
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
             Box(
                 modifier = Modifier.size(30.dp).clip(CircleShape).background((if (loadedFromCache) Color(0xFFF57C00) else Color(0xFF2E7D32)).copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center,
@@ -2765,20 +2764,12 @@ private fun ThreadDetailActionToolbar(
             if (canDelete) CircularToolbarIcon(FeedflowIconMap.symbol("trash.fill"), stringResource(R.string.delete), onDelete)
             CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
             CircularToolbarIcon(
-                icon = if (isSpeaking) FeedflowIconMap.symbol("stop.fill") else FeedflowIconMap.symbol("speaker.wave.2.fill"),
-                label = stringResource(R.string.speak),
-                onClick = onSpeak,
-            )
-            CircularToolbarIcon(
                 icon = if (isBookmarked) FeedflowIconMap.symbol("bookmark.fill") else FeedflowIconMap.symbol("bookmark"),
                 label = stringResource(R.string.bookmark),
                 onClick = onToggleBookmark,
             )
-            CircularToolbarIcon(FeedflowIconMap.symbol("square.and.arrow.up"), stringResource(R.string.share), onShare)
             CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), stringResource(R.string.ai_summary_action), onAiSummary)
             CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme), onTheme)
-            CircularToolbarIcon(FeedflowIconMap.symbol("safari.fill"), stringResource(R.string.browser), onOpenBrowser)
-            CircularToolbarIcon(FeedflowIconMap.symbol("arrow.up.forward.app"), stringResource(R.string.open_in_browser), onOpenExternal)
             CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.select_community), onHome)
         }
     }

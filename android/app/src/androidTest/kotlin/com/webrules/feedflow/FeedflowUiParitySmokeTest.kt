@@ -86,7 +86,7 @@ class FeedflowUiParitySmokeTest {
         }
         compose.onAllNodesWithContentDescription("Thread row")[0].performClick()
         compose.onNodeWithText("Fixture comment.").assertIsDisplayed()
-        listOf("Share", "Speak", "Theme", "Browser", "Open in browser", "Select a Community").forEach { description ->
+        listOf("Theme", "AI Summary", "Bookmark", "Select a Community").forEach { description ->
             assertTrue(description, compose.onAllNodesWithContentDescription(description).fetchSemanticsNodes().isNotEmpty())
         }
         compose.onNodeWithContentDescription("AI Summary").performClick()
