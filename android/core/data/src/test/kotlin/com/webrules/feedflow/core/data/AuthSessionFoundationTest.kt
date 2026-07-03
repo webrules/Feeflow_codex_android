@@ -71,6 +71,10 @@ class AuthSessionFoundationTest {
         assertNull(store.getSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${ForumSite.Zhihu.serviceId}_password"))
     }
 
+    @Test fun zhihuServiceRestoreSessionRequiresSavedAuthCookies() = kotlinx.coroutines.runBlocking {
+        assertFalse(ZhihuService(store = InMemoryFeedflowStore()).restoreSession())
+    }
+
     private fun sampleThread(): FeedThread {
         val community = Community("hot", "Hot", "", "Zhihu", 0, 0)
         return FeedThread(

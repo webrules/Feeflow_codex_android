@@ -8,6 +8,7 @@ import com.webrules.feedflow.core.network.FeedflowHttpClient
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SourceServiceWiringTest {
@@ -43,6 +44,10 @@ class SourceServiceWiringTest {
         assertTrue(detail.thread.content.contains("Original"))
         assertEquals("bob", detail.comments.single().author.username)
         assertTrue(detail.comments.single().content.contains("Hello"))
+        val secondPage = service.fetchThreadDetail("123", 2)
+        assertEquals(2, secondPage.totalPages)
+        assertEquals("", secondPage.thread.title)
+        assertTrue(secondPage.comments.isEmpty())
         service.postComment("123", "tech", "hello world")
         assertEquals("https://www.v2ex.com/t/123", httpClient.lastPostUrl)
         assertEquals("content=hello+world&once=7788", httpClient.lastPostBody)
@@ -193,6 +198,9 @@ class SourceServiceWiringTest {
         assertEquals("Answer body", detail.thread.content)
         assertEquals("Nice", detail.comments.single().content)
         assertEquals("Reader", detail.comments.single().author.username)
+        assertFailsWith<FeedflowError.Parsing> { service.fetchThreadDetail("invalid", 1) }
+        assertFailsWith<FeedflowError.Parsing> { service.fetchThreadDetail("video_456", 1) }
+        Unit
     }
 
     @Test fun zhihuServiceMarksRecommendationsReadAndSendsNotInterestedPayload() = runBlocking {

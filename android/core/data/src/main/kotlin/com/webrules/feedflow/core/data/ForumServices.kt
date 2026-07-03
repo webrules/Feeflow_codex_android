@@ -307,6 +307,22 @@ class V2exService(
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
+        if (page > 1) {
+            return ThreadDetailResult(
+                thread = FeedThread(
+                    id = threadId,
+                    title = "",
+                    content = "",
+                    author = User("", "", ""),
+                    community = Community("v2ex", "V2EX", "", "V2EX", 0, 0),
+                    timeAgo = "",
+                    likeCount = 0,
+                    commentCount = 0,
+                ),
+                comments = emptyList(),
+                totalPages = page,
+            )
+        }
         val html = httpClient.get("https://www.v2ex.com/t/$threadId")
         val title = V2exParser.parseTopicTitle(html).ifBlank { "V2EX" }
         val content = V2exParser.parseTopicContent(html)
@@ -653,10 +669,10 @@ class ZhihuService(
 
     override suspend fun restoreSession(): Boolean {
         val cookies = cookies()
-        if (cookies.isEmpty()) return true
+        if (cookies.isEmpty()) return false
         val me = runCatching {
             httpClient.get("https://www.zhihu.com/api/v4/me", cookies, apiHeaders())
-        }.getOrNull() ?: return true
+        }.getOrNull() ?: return false
         return ZhihuJson.parse(me)?.obj()?.str("name") != null
     }
 
@@ -712,11 +728,14 @@ class ZhihuService(
         val parts = threadId.split("_", limit = 2)
         val type = parts.getOrNull(0).orEmpty()
         val id = parts.getOrNull(1).orEmpty()
+        if (parts.size != 2 || id.isBlank() || id.any { !it.isDigit() }) {
+            throw FeedflowError.Parsing(id, "zhihuThreadId", threadId)
+        }
         return when (type) {
             "answer" -> fetchAnswerDetail(id, page)
             "article" -> fetchArticleDetail(id, page)
             "question" -> fetchQuestionDetail(id, page)
-            else -> fetchGenericDetail(threadId)
+            else -> throw FeedflowError.Parsing(id, "zhihuThreadType", threadId)
         }
     }
 
