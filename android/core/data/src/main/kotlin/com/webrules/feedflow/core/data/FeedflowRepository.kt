@@ -88,6 +88,42 @@ class FeedflowRepository(
         )
     }
 
+    suspend fun loadMoreComments(site: ForumSite, thread: FeedThread, page: Int): List<Comment> =
+        runCatching {
+            withContext(Dispatchers.IO) {
+                serviceFactory(site).fetchThreadDetail(thread.id, page).comments
+            }
+        }.getOrDefault(emptyList())
+
+    fun supportsCommentPagination(site: ForumSite): Boolean = site == ForumSite.FourD4Y
+
+    fun isThreadDetailCached(site: ForumSite, thread: FeedThread): Boolean =
+        store.getCachedThread(thread.id, site.serviceId) != null
+
+    suspend fun prefetchThreadDetails(
+        site: ForumSite,
+        threads: List<FeedThread>,
+        enabled: Boolean,
+        isWifi: Boolean,
+        maxQueueSize: Int = 6,
+    ) {
+        var queued = 0
+        for (thread in threads) {
+            val decision = PrefetchDecisionInput(
+                enabled = enabled,
+                isWifi = isWifi,
+                site = site,
+                detailCached = isThreadDetailCached(site, thread),
+                queueSize = queued,
+                maxQueueSize = maxQueueSize,
+            )
+            if (!PrefetchGate.shouldPrefetch(decision)) continue
+            loadThreadDetail(site, thread)
+            queued++
+            if (queued >= maxQueueSize) break
+        }
+    }
+
     suspend fun searchThreads(site: ForumSite, query: String, page: Int = 1): CacheFirstResult<SearchResult> =
         runCatching {
             withContext(Dispatchers.IO) {

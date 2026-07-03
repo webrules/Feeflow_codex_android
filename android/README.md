@@ -7,9 +7,9 @@ Native Android scaffold for duplicating the existing SwiftUI Feedflow app with K
 - `app`: Compose UI shell mirroring the iOS home grid, search entry, bottom toolbar, community list, and thread-list flow.
 - `core:model`: Kotlin data models matching Feedflow's Swift models.
 - `core:data`: source service contracts, mock repository, localization, parsers, and source-specific helper logic.
-- `core:database`: persistence interface plus an in-memory parity implementation pending Room/SQLDelight.
-- `core:network`: HTTP client and cookie matching foundations.
-- `core:security`: AES-GCM secret store foundation pending AndroidX Security Crypto wiring.
+- `core:database`: persistence interface plus an in-memory parity implementation; the app provides a SQLite-backed store (`AndroidSqliteFeedflowStore`) for on-device persistence.
+- `core:network`: HTTP client and cookie matching foundations, including per-request cookies, custom headers, and forced-charset (GB18030) decoding.
+- `core:security`: AES-GCM secret store foundation; the app provides an Android Keystore-backed implementation (`KeystoreSecretStore`) so the encryption key is persisted securely across launches.
 - `core:ui`: Material 3 theme colors aligned with the iOS Feedflow theme.
 
 ## Build and test

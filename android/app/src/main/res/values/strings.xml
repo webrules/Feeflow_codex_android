@@ -155,4 +155,10 @@
     <string name="replying_to_user">Replying to %1$s</string>
     <string name="just_now">just now</string>
     <string name="rss_network_warning">Unable to refresh this feed. Check the network and try again.</string>
+    <string name="previous_thread">Previous</string>
+    <string name="next_thread">Next</string>
+    <string name="load_more_comments">Load more comments</string>
+    <string name="loading">Loading…</string>
+    <string name="share">Share</string>
+    <string name="open_in_browser">Open in browser</string>
 </resources>
