@@ -475,7 +475,8 @@ class FourD4YService(
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
-        val html = fetch("https://www.4d4y.com/forum/viewthread.php?tid=$threadId&page=$page", authCookies())
+        val cookies = authCookies()
+        val html = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$threadId&page=$page", cookies), cookies)
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
         return ThreadDetailResult(parsed.first, parsed.second, parsed.third)
@@ -486,6 +487,14 @@ class FourD4YService(
 
     private suspend fun fetch(url: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): String =
         httpClient.get(url, cookies, FOURD4Y_HEADERS, "GB18030")
+
+    private fun withSid(url: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): String {
+        val sid = cookies.firstOrNull { it.name.equals("sid", ignoreCase = true) }?.value
+            ?: store?.getSetting("4d4y_sid")
+            ?: return url
+        val separator = if (url.contains("?")) "&" else "?"
+        return "$url${separator}sid=${sid.formEncode()}"
+    }
 
     private fun validateSessionHtml(html: String): Boolean {
         val forumMatches = Regex("""href="forumdisplay\.php\?fid=(\d+)[^"]*"[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE)
@@ -500,15 +509,21 @@ class FourD4YService(
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val formHtml = fetch("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies)
+        val formHtml = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies), cookies)
         val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "replyFormhash", formHtml.take(200))
         httpClient.post(
-            url = "https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId&extra=&replysubmit=yes&inajax=1",
+            url = withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId&extra=&replysubmit=yes&inajax=1", cookies),
             body = listOf(
                 "formhash=${formHash.gbkFormEncode()}",
+                "posttime=${Instant.now().epochSecond}",
+                "wysiwyg=1",
+                "noticeauthor=",
+                "noticetrimstr=",
+                "noticeauthormsg=",
                 "subject=",
                 "message=${content.gbkFormEncode()}",
                 "replysubmit=yes",
+                "inajax=1",
             ).joinToString("&"),
             cookies = cookies,
         )
@@ -517,12 +532,12 @@ class FourD4YService(
     override suspend fun createThread(categoryId: String, title: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val formHtml = fetch("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies)
+        val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies), cookies)
         val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "newThreadFormhash", formHtml.take(200))
         val typeField = extractFirstTypeId(formHtml)?.let { "&typeid=${it.gbkFormEncode()}" }.orEmpty()
         httpClient.post(
-            url = "https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId&extra=&topicsubmit=yes&inajax=1",
-            body = "formhash=${formHash.gbkFormEncode()}$typeField&subject=${title.gbkFormEncode()}&message=${content.gbkFormEncode()}&topicsubmit=yes",
+            url = withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId&extra=&topicsubmit=yes&inajax=1", cookies),
+            body = "formhash=${formHash.gbkFormEncode()}&posttime=${Instant.now().epochSecond}&wysiwyg=1$typeField&subject=${title.gbkFormEncode()}&message=${content.gbkFormEncode()}&topicsubmit=yes&inajax=1",
             cookies = cookies,
         )
     }
@@ -530,12 +545,12 @@ class FourD4YService(
     override suspend fun deleteThread(threadId: String, categoryId: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val threadHtml = fetch("https://www.4d4y.com/forum/viewthread.php?tid=$threadId", cookies)
+        val threadHtml = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$threadId", cookies), cookies)
         val pid = parseFirstPostId(threadHtml) ?: throw FeedflowError.Parsing(id, "deletePid", threadHtml.take(200))
-        val editHtml = fetch("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1", cookies)
+        val editHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1", cookies), cookies)
         val formHash = extractFormHash(editHtml) ?: throw FeedflowError.Parsing(id, "deleteFormhash", editHtml.take(200))
         httpClient.post(
-            url = "https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1&editsubmit=yes&inajax=1",
+            url = withSid("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1&editsubmit=yes&inajax=1", cookies),
             body = "formhash=${formHash.gbkFormEncode()}&delete=1&editsubmit=yes&inajax=1",
             cookies = cookies,
         )

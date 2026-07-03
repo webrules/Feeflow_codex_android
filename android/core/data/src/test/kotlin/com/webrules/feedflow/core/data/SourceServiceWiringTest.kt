@@ -91,7 +91,10 @@ class SourceServiceWiringTest {
 
     @Test fun fourD4YServiceUsesDiscuzCategoriesAndThreadRows() = runBlocking {
         val store = InMemoryFeedflowStore()
-        store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
+        store.saveCookies("4d4y", listOf(
+            FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null),
+            FeedflowCookie("sid", "SID123", "4d4y.com", expiresAtMillis = null),
+        ))
         val httpClient = SourceFixtureHttpClient(
             "https://www.4d4y.com/forum/index.php" to """<a href="forumdisplay.php?fid=7">技术交流</a>""",
             "https://www.4d4y.com/forum/forumdisplay.php?fid=7&page=1" to """
@@ -101,7 +104,7 @@ class SourceServiceWiringTest {
                   <td class="nums"><strong>4</strong></td>
                 </tbody>
             """,
-            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=1" to """
+            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=1&sid=SID123" to """
                 <h2><a href="viewthread.php?tid=99">4D4Y detail</a></h2>
                 <a href="forumdisplay.php?fid=7">技术交流</a>
                 <a href="space.php?uid=123">alice</a><em>发表于 1h</em>
@@ -112,7 +115,7 @@ class SourceServiceWiringTest {
                   <div class="replycon">Reply<br>content<img src="https://cdn.example.com/r.png"></div>
                 </li>
             """,
-            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=2" to """
+            "https://www.4d4y.com/forum/viewthread.php?tid=99&page=2&sid=SID123" to """
                 <h2><a href="viewthread.php?tid=99">4D4Y detail</a></h2>
                 <a href="forumdisplay.php?fid=7">技术交流</a>
                 <li id="pid789">
@@ -120,14 +123,14 @@ class SourceServiceWiringTest {
                   <div class="replycon">Second page reply</div>
                 </li>
             """,
-            "https://www.4d4y.com/forum/viewthread.php?tid=99" to """
+            "https://www.4d4y.com/forum/viewthread.php?tid=99&sid=SID123" to """
                 <input type="hidden" name="formhash" value="abcd1234">
                 <div id="authorposton456"></div>
             """,
-            "https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1" to """
+            "https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&sid=SID123" to """
                 <input type="hidden" name="formhash" value="ijkl9012">
             """,
-            "https://www.4d4y.com/forum/post.php?action=newthread&fid=7" to """
+            "https://www.4d4y.com/forum/post.php?action=newthread&fid=7&sid=SID123" to """
                 <input type="hidden" name="formhash" value="efgh5678">
                 <select><option value="0">None</option><option value="12">Type</option></select>
             """,
@@ -156,15 +159,21 @@ class SourceServiceWiringTest {
         assertEquals(0, secondPage.thread.commentCount)
         assertEquals("carol", secondPage.comments.single().author.username)
         service.postComment("99", "7", "Reply body")
-        assertEquals("https://www.4d4y.com/forum/post.php?action=reply&fid=7&tid=99&extra=&replysubmit=yes&inajax=1", httpClient.lastPostUrl)
-        assertEquals("formhash=abcd1234&subject=&message=Reply+body&replysubmit=yes", httpClient.lastPostBody)
+        assertEquals("https://www.4d4y.com/forum/post.php?action=reply&fid=7&tid=99&extra=&replysubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
+        assertTrue(httpClient.lastPostBody.contains("formhash=abcd1234"))
+        assertTrue(httpClient.lastPostBody.contains("posttime="))
+        assertTrue(httpClient.lastPostBody.contains("wysiwyg=1"))
+        assertTrue(httpClient.lastPostBody.contains("noticeauthor=&noticetrimstr=&noticeauthormsg="))
+        assertTrue(httpClient.lastPostBody.contains("subject=&message=Reply+body&replysubmit=yes&inajax=1"))
         service.createThread("7", "Title body", "Thread body")
-        assertEquals("https://www.4d4y.com/forum/post.php?action=newthread&fid=7&extra=&topicsubmit=yes&inajax=1", httpClient.lastPostUrl)
-        assertEquals("formhash=efgh5678&typeid=12&subject=Title+body&message=Thread+body&topicsubmit=yes", httpClient.lastPostBody)
+        assertEquals("https://www.4d4y.com/forum/post.php?action=newthread&fid=7&extra=&topicsubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
+        assertTrue(httpClient.lastPostBody.contains("formhash=efgh5678"))
+        assertTrue(httpClient.lastPostBody.contains("posttime="))
+        assertTrue(httpClient.lastPostBody.contains("wysiwyg=1&typeid=12&subject=Title+body&message=Thread+body&topicsubmit=yes&inajax=1"))
         service.deleteThread("99", "7")
-        assertEquals("https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&editsubmit=yes&inajax=1", httpClient.lastPostUrl)
+        assertEquals("https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&editsubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
         assertEquals("formhash=ijkl9012&delete=1&editsubmit=yes&inajax=1", httpClient.lastPostBody)
-        assertEquals("auth=token", httpClient.lastCookieHeader)
+        assertEquals("auth=token; sid=SID123", httpClient.lastCookieHeader)
     }
 
     @Test fun fourD4YRestoreSessionStoresLoggedInUsernameForDeleteGating() = runBlocking {
