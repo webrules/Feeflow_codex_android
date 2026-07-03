@@ -1,6 +1,7 @@
 package com.webrules.feedflow
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -8,8 +9,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.longClick
+import androidx.test.espresso.Espresso
 import com.webrules.feedflow.core.data.FeedflowRepository
 import com.webrules.feedflow.core.data.ForumService
 import com.webrules.feedflow.core.data.SearchResult
@@ -127,6 +130,43 @@ class FeedflowUiParitySmokeTest {
         compose.onNodeWithText("Not interested").assertIsDisplayed()
     }
 
+    @Test fun systemBackReturnsToListAndPinsSelectedThreadAtTop() {
+        compose.onNodeWithContentDescription("Site Hacker News").performScrollTo().performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Community row").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onAllNodesWithContentDescription("Community row")[0].performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Thread row").fetchSemanticsNodes().size > 3
+        }
+
+        val selectedTitle = "Hacker News fixture topic 4"
+        compose.onNodeWithText(selectedTitle).performClick()
+        compose.onNodeWithText("Fixture comment.").assertIsDisplayed()
+
+        Espresso.pressBack()
+
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithText(selectedTitle).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(selectedTitle).assertIsDisplayed()
+        compose.onNodeWithText("Hacker News fixture topic 1").assertDoesNotExist()
+    }
+
+    @Test fun searchLoginButtonOpensLoginAndReturnsToSearch() {
+        compose.onAllNodes(hasSetTextAction())[0].performTextInput("android")
+        compose.onNodeWithText("Search").performClick()
+        compose.onNodeWithText("Login required").assertIsDisplayed()
+
+        compose.onNodeWithText("Web Login").performClick()
+        compose.onNodeWithText("Cancel").assertIsDisplayed()
+        compose.onNodeWithText("Save Session").assertIsDisplayed()
+
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithText("Search results").assertIsDisplayed()
+        compose.onNodeWithText("Web Login").assertIsDisplayed()
+    }
+
     private class FixtureForumService(private val site: ForumSite) : ForumService {
         private val communities = if (site == ForumSite.Zhihu) {
             listOf(
@@ -163,15 +203,24 @@ class FeedflowUiParitySmokeTest {
             } else {
                 author
             }
-            return listOf(thread.copy(author = selectedAuthor, community = selectedCommunity))
+            return (1..12).map { index ->
+                thread.copy(
+                    id = "${site.serviceId}-thread-$index",
+                    title = "${site.displayName} fixture topic $index",
+                    author = selectedAuthor,
+                    community = selectedCommunity,
+                )
+            }
         }
 
-        override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult =
-            ThreadDetailResult(
-                thread = thread,
+        override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
+            val index = threadId.substringAfterLast("-").toIntOrNull() ?: 1
+            return ThreadDetailResult(
+                thread = thread.copy(id = threadId, title = "${site.displayName} fixture topic $index"),
                 comments = listOf(Comment("comment-1", author, "Fixture comment.", "now", 0)),
                 totalPages = 1,
             )
+        }
 
         override suspend fun searchThreads(query: String, page: Int): SearchResult = SearchResult(listOf(thread), false)
 

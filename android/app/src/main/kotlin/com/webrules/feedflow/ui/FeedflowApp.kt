@@ -10,6 +10,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -197,8 +198,17 @@ import java.util.Locale
 private sealed interface FeedflowRoute {
     data object SiteList : FeedflowRoute
     data class Communities(val site: ForumSite) : FeedflowRoute
-    data class Threads(val site: ForumSite, val community: Community) : FeedflowRoute
-    data class Detail(val site: ForumSite, val thread: FeedThread, val contextThreads: List<FeedThread> = emptyList()) : FeedflowRoute
+    data class Threads(
+        val site: ForumSite,
+        val community: Community,
+        val anchorThreadId: String? = null,
+    ) : FeedflowRoute
+    data class Detail(
+        val site: ForumSite,
+        val thread: FeedThread,
+        val contextThreads: List<FeedThread> = emptyList(),
+        val returnTo: FeedflowRoute? = null,
+    ) : FeedflowRoute
     data object Login : FeedflowRoute
     data object Settings : FeedflowRoute
     data object Bookmarks : FeedflowRoute
@@ -211,12 +221,48 @@ private sealed interface FeedflowRoute {
         val thread: FeedThread,
         val comments: List<Comment>,
         val contextThreads: List<FeedThread> = emptyList(),
+        val detailReturnTo: FeedflowRoute? = null,
     ) : FeedflowRoute
-    data class SearchResults(val site: ForumSite, val query: String) : FeedflowRoute
-    data class WebLogin(val site: ForumSite) : FeedflowRoute
+    data class SearchResults(
+        val site: ForumSite,
+        val query: String,
+        val anchorThreadId: String? = null,
+    ) : FeedflowRoute
+    data class WebLogin(
+        val site: ForumSite,
+        val returnTo: FeedflowRoute = Login,
+    ) : FeedflowRoute
     data class Browser(val url: String, val title: String, val returnTo: FeedflowRoute = SiteList) : FeedflowRoute
     data class ImageViewer(val url: String, val returnTo: FeedflowRoute = SiteList) : FeedflowRoute
     data class NewThread(val site: ForumSite, val community: Community) : FeedflowRoute
+}
+
+private fun FeedflowRoute.Detail.detailReturnRoute(thread: FeedThread): FeedflowRoute =
+    when (val destination = returnTo) {
+        is FeedflowRoute.Threads -> destination.copy(anchorThreadId = thread.id)
+        is FeedflowRoute.SearchResults -> destination.copy(anchorThreadId = thread.id)
+        null -> FeedflowRoute.Threads(site, thread.community, thread.id)
+        else -> destination
+    }
+
+private fun FeedflowRoute.previousRoute(): FeedflowRoute = when (this) {
+    FeedflowRoute.SiteList -> FeedflowRoute.SiteList
+    is FeedflowRoute.Communities -> FeedflowRoute.SiteList
+    is FeedflowRoute.Threads -> FeedflowRoute.Communities(site)
+    is FeedflowRoute.Detail -> detailReturnRoute(thread)
+    FeedflowRoute.Login,
+    FeedflowRoute.Settings,
+    FeedflowRoute.Bookmarks,
+    FeedflowRoute.RssManager,
+    FeedflowRoute.CommunityConfig,
+    FeedflowRoute.CrossSiteAi,
+    is FeedflowRoute.SearchResults -> FeedflowRoute.SiteList
+    FeedflowRoute.DailyRssSummary -> FeedflowRoute.RssManager
+    is FeedflowRoute.AiSummary -> FeedflowRoute.Detail(site, thread, contextThreads, detailReturnTo)
+    is FeedflowRoute.WebLogin -> returnTo
+    is FeedflowRoute.Browser -> returnTo
+    is FeedflowRoute.ImageViewer -> returnTo
+    is FeedflowRoute.NewThread -> FeedflowRoute.Threads(site, community)
 }
 
 private object FeedflowIconMap {
@@ -347,6 +393,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     var filterRevision by remember { mutableStateOf(0) }
     var darkTheme by remember { mutableStateOf(store.getSetting(DarkThemeSettingKey)?.toBooleanStrictOrNull() ?: false) }
     var language by remember { mutableStateOf(store.getSetting(LanguageSettingKey) ?: "en") }
+    BackHandler(enabled = route != FeedflowRoute.SiteList) {
+        route = route.previousRoute()
+    }
     val localizedContext = remember(context, language) {
         val configuration = android.content.res.Configuration(context.resources.configuration)
         configuration.setLocale(if (language == "zh") Locale.SIMPLIFIED_CHINESE else Locale.US)
@@ -392,7 +441,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onBack = { route = FeedflowRoute.SiteList },
                 onHome = { route = FeedflowRoute.SiteList },
                 onRefresh = { refreshToken += 1 },
-                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site) },
+                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site, current) },
                 onDailySummary = { route = FeedflowRoute.DailyRssSummary },
                 onFeedManager = { route = FeedflowRoute.RssManager },
                 onCommunityClick = { route = FeedflowRoute.Threads(current.site, it) },
@@ -427,7 +476,8 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 store.getFilteredPostIds(current.site.serviceId)
             }
             val visibleThreads = content.value.filterNot { thread ->
-                filteredPostIds.contains(thread.id) || filteredPostIds.contains(thread.id.substringAfter("_", thread.id))
+                thread.id != current.anchorThreadId &&
+                    (filteredPostIds.contains(thread.id) || filteredPostIds.contains(thread.id.substringAfter("_", thread.id)))
             }
             ThreadListScreen(
                 site = current.site,
@@ -437,14 +487,22 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
                 loginRequired = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
+                anchorThreadId = current.anchorThreadId,
                 onBack = { route = FeedflowRoute.Communities(current.site) },
                 onHome = { route = FeedflowRoute.SiteList },
-                onThreadClick = { route = FeedflowRoute.Detail(current.site, it, visibleThreads) },
+                onThreadClick = { thread ->
+                    route = FeedflowRoute.Detail(
+                        site = current.site,
+                        thread = thread,
+                        contextThreads = visibleThreads,
+                        returnTo = current.copy(anchorThreadId = thread.id),
+                    )
+                },
                 onNewThread = { route = FeedflowRoute.NewThread(current.site, current.community) },
                 onRefresh = {
                     refreshToken += 1
                 },
-                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site) },
+                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site, current) },
                 onTheme = {
                     darkTheme = !darkTheme
                     store.saveSetting(DarkThemeSettingKey, darkTheme.toString())
@@ -476,7 +534,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             )
         }
         is FeedflowRoute.Detail -> {
-            var activeThread by remember(current.site, current.thread.id) { mutableStateOf(current.thread) }
+            val activeThread = current.thread
             var content by remember(current.site, activeThread.id) {
                 mutableStateOf(appStateController.detail(current.site, activeThread))
             }
@@ -507,8 +565,14 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 webUrl = appStateController.webUrl(current.site, content.value.thread),
                 hasPrevious = activeIndex > 0,
                 hasNext = activeIndex >= 0 && activeIndex < contextThreads.size - 1,
-                onPrevious = { if (activeIndex > 0) activeThread = contextThreads[activeIndex - 1] },
-                onNext = { if (activeIndex >= 0 && activeIndex < contextThreads.size - 1) activeThread = contextThreads[activeIndex + 1] },
+                onPrevious = {
+                    if (activeIndex > 0) route = current.copy(thread = contextThreads[activeIndex - 1])
+                },
+                onNext = {
+                    if (activeIndex >= 0 && activeIndex < contextThreads.size - 1) {
+                        route = current.copy(thread = contextThreads[activeIndex + 1])
+                    }
+                },
                 canLoadMore = canLoadMore,
                 onLoadMore = {
                     val nextPage = commentPage + 1
@@ -520,21 +584,35 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                         commentPage = nextPage
                     }
                 },
-                onBack = { route = FeedflowRoute.Threads(current.site, content.value.thread.community) },
+                onBack = { route = current.detailReturnRoute(content.value.thread) },
                 onHome = { route = FeedflowRoute.SiteList },
-                onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments, current.contextThreads) },
-                onOpenBrowser = { route = FeedflowRoute.Browser(appStateController.webUrl(current.site, content.value.thread), content.value.thread.title) },
+                onAiSummary = {
+                    route = FeedflowRoute.AiSummary(
+                        current.site,
+                        content.value.thread,
+                        content.value.comments,
+                        current.contextThreads,
+                        current.returnTo,
+                    )
+                },
+                onOpenBrowser = {
+                    route = FeedflowRoute.Browser(
+                        appStateController.webUrl(current.site, content.value.thread),
+                        content.value.thread.title,
+                        FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads, current.returnTo),
+                    )
+                },
                 onOpenLink = { url, title ->
                     route = FeedflowRoute.Browser(
                         url = url,
                         title = title,
-                        returnTo = FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads),
+                        returnTo = FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads, current.returnTo),
                     )
                 },
                 onOpenImage = { url ->
                     route = FeedflowRoute.ImageViewer(
                         url = url,
-                        returnTo = FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads),
+                        returnTo = FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads, current.returnTo),
                     )
                 },
                 onRefresh = { refreshToken += 1 },
@@ -587,9 +665,13 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             urlBookmarks = remember(bookmarkRevision) { store.getUrlBookmarks() },
             onClose = { route = FeedflowRoute.SiteList },
             onThreadClick = { thread, serviceId ->
-                route = FeedflowRoute.Detail(ForumSite.fromServiceId(serviceId) ?: ForumSite.Rss, thread)
+                route = FeedflowRoute.Detail(
+                    ForumSite.fromServiceId(serviceId) ?: ForumSite.Rss,
+                    thread,
+                    returnTo = FeedflowRoute.Bookmarks,
+                )
             },
-            onUrlClick = { url, title -> route = FeedflowRoute.Browser(url, title) },
+            onUrlClick = { url, title -> route = FeedflowRoute.Browser(url, title, FeedflowRoute.Bookmarks) },
         )
         FeedflowRoute.RssManager -> RssFeedManagerScreen(
             feeds = homeState.rssFeeds,
@@ -620,7 +702,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             apiKey = homeState.geminiApiKey,
             language = language,
             onClose = { route = FeedflowRoute.SiteList },
-            onThreadClick = { site, thread -> route = FeedflowRoute.Detail(site, thread) },
+            onThreadClick = { site, thread ->
+                route = FeedflowRoute.Detail(site, thread, returnTo = FeedflowRoute.CrossSiteAi)
+            },
         )
         is FeedflowRoute.AiSummary -> AiSummaryScreen(
             site = current.site,
@@ -629,16 +713,31 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             loader = appStateController,
             comments = current.comments,
             language = language,
-            onClose = { route = FeedflowRoute.Detail(current.site, current.thread, current.contextThreads) },
+            onClose = {
+                route = FeedflowRoute.Detail(
+                    current.site,
+                    current.thread,
+                    current.contextThreads,
+                    current.detailReturnTo,
+                )
+            },
         )
         is FeedflowRoute.SearchResults -> SearchResultsScreen(
             site = current.site,
             query = current.query,
             requiresLogin = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
+            anchorThreadId = current.anchorThreadId,
             loader = appStateController,
             onBack = { route = FeedflowRoute.SiteList },
             onHome = { route = FeedflowRoute.SiteList },
-            onThreadClick = { route = FeedflowRoute.Detail(current.site, it) },
+            onLoginRequired = { route = FeedflowRoute.WebLogin(current.site, current) },
+            onThreadClick = { thread ->
+                route = FeedflowRoute.Detail(
+                    current.site,
+                    thread,
+                    returnTo = current.copy(anchorThreadId = thread.id),
+                )
+            },
         )
         is FeedflowRoute.WebLogin -> WebLoginSheetScreen(
             site = current.site,
@@ -648,9 +747,13 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             onAccepted = {
                 appStateController.setSignedIn(current.site, true)
                 homeState = appStateController.homeState
-                route = FeedflowRoute.Communities(current.site)
+                route = if (current.returnTo == FeedflowRoute.Login) {
+                    FeedflowRoute.Communities(current.site)
+                } else {
+                    current.returnTo
+                }
             },
-            onClose = { route = FeedflowRoute.Login },
+            onClose = { route = current.returnTo },
         )
         is FeedflowRoute.Browser -> InAppBrowserScreen(
             url = current.url,
@@ -823,6 +926,7 @@ private fun ThreadListScreen(
     warning: String?,
     loadedFromCache: Boolean,
     loginRequired: Boolean,
+    anchorThreadId: String?,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onThreadClick: (FeedThread) -> Unit,
@@ -836,8 +940,16 @@ private fun ThreadListScreen(
     onNotInterested: (FeedThread) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var notInterestedThreadId by remember(site, community.id) { mutableStateOf<String?>(null) }
     val supportsNotInterested = ThreadRowRenderingPolicy.supportsNotInterested(site, community.id)
+    LaunchedEffect(anchorThreadId, threads.map { it.id }, warning, loginRequired) {
+        val threadIndex = threads.indexOfFirst { it.id == anchorThreadId }
+        if (threadIndex >= 0) {
+            val rowsBeforeThreads = 2 + (if (warning != null) 1 else 0) + (if (loginRequired) 1 else 0)
+            listState.scrollToItem(rowsBeforeThreads + threadIndex)
+        }
+    }
     Scaffold(
         bottomBar = {
             ScreenToolbar(
@@ -854,6 +966,7 @@ private fun ThreadListScreen(
     ) { padding ->
         ForumBackground(Modifier.padding(padding)) {
             LazyColumn(
+                state = listState,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -1831,12 +1944,15 @@ private fun SearchResultsScreen(
     site: ForumSite,
     query: String,
     requiresLogin: Boolean,
+    anchorThreadId: String?,
     loader: FeedflowAppStateController,
     onBack: () -> Unit,
     onHome: () -> Unit,
+    onLoginRequired: () -> Unit,
     onThreadClick: (FeedThread) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var results by remember(site, query) { mutableStateOf(LoadableContent.loaded(SearchResult(emptyList(), false))) }
     var refreshToken by remember(site, query) { mutableStateOf(0) }
     var page by remember(site, query) { mutableStateOf(1) }
@@ -1867,6 +1983,15 @@ private fun SearchResultsScreen(
         if (newThreads.isNotEmpty()) page = nextPage
         isLoadingMore = false
     }
+    LaunchedEffect(anchorThreadId, results.value.threads.map { it.id }, results.warning) {
+        val threadIndex = results.value.threads.indexOfFirst { it.id == anchorThreadId }
+        if (threadIndex >= 0) {
+            val rowsBeforeThreads = 2 + (if (results.warning != null) 1 else 0)
+            listState.scrollToItem(rowsBeforeThreads + threadIndex)
+        }
+    }
+    val needsLogin = requiresLogin ||
+        (site.requiresLogin && results.warning?.contains("Authentication required", ignoreCase = true) == true)
     Scaffold(
         bottomBar = {
             ScreenToolbar(
@@ -1878,19 +2003,18 @@ private fun SearchResultsScreen(
         },
     ) { padding ->
         ForumBackground(Modifier.padding(padding)) {
-            LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 item { FeedflowProgressLine(results.isLoading) }
                 item {
                     HeaderCard(stringResource(R.string.search_results), "\"$query\"", site)
                 }
                 results.warning?.let { item { WarningCard(it) } }
-                if (requiresLogin) {
-                    item {
-                        ForumCard(contentAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Login, contentDescription = null)
-                            Text(stringResource(R.string.login_required_search, site.displayName), textAlign = TextAlign.Center)
-                        }
-                    }
+                if (needsLogin) {
+                    item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
                 } else if (results.value.threads.isEmpty()) {
                     item {
                         ForumCard(contentAlignment = Alignment.CenterHorizontally) {
