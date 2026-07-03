@@ -211,7 +211,7 @@ private sealed interface FeedflowRoute {
     data class SearchResults(val site: ForumSite, val query: String) : FeedflowRoute
     data class WebLogin(val site: ForumSite) : FeedflowRoute
     data class Browser(val url: String, val title: String) : FeedflowRoute
-    data class ImageViewer(val url: String) : FeedflowRoute
+    data class ImageViewer(val url: String, val returnTo: FeedflowRoute = SiteList) : FeedflowRoute
     data class NewThread(val site: ForumSite, val community: Community) : FeedflowRoute
 }
 
@@ -522,7 +522,12 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 onAiSummary = { route = FeedflowRoute.AiSummary(current.site, content.value.thread, content.value.comments, current.contextThreads) },
                 onOpenBrowser = { route = FeedflowRoute.Browser(appStateController.webUrl(current.site, content.value.thread), content.value.thread.title) },
                 onOpenLink = { url, title -> route = FeedflowRoute.Browser(url, title) },
-                onOpenImage = { url -> route = FeedflowRoute.ImageViewer(url) },
+                onOpenImage = { url ->
+                    route = FeedflowRoute.ImageViewer(
+                        url = url,
+                        returnTo = FeedflowRoute.Detail(current.site, content.value.thread, current.contextThreads),
+                    )
+                },
                 onRefresh = { refreshToken += 1 },
                 onTheme = {
                     darkTheme = !darkTheme
@@ -653,7 +658,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             },
             onClose = { route = FeedflowRoute.SiteList },
         )
-        is FeedflowRoute.ImageViewer -> FullScreenImageScreen(url = current.url, onClose = { route = FeedflowRoute.SiteList })
+        is FeedflowRoute.ImageViewer -> FullScreenImageScreen(url = current.url, onClose = { route = current.returnTo })
         is FeedflowRoute.NewThread -> NewThreadScreen(
             site = current.site,
             community = current.community,
