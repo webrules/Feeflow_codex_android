@@ -728,9 +728,9 @@ private fun ThreadListScreen(
                 onBack = onBack,
                 onHome = onHome,
                 actions = {
-                    if (site.supportsThreadCreation) CircularToolbarIcon(FeedflowIconMap.symbol("square.and.pencil"), "New Thread", onNewThread)
-                    CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), "Refresh", onRefresh)
-                    CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), "Theme") {}
+                    if (site.supportsThreadCreation) CircularToolbarIcon(FeedflowIconMap.symbol("square.and.pencil"), stringResource(R.string.new_thread_action), onNewThread)
+                    CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
+                    CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme)) {}
                 },
             )
         },
@@ -1435,7 +1435,7 @@ private fun CrossSiteAiSummaryScreen(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = onClose) { Text(stringResource(R.string.close)) }
                     Spacer(Modifier.weight(1f))
-                    CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), "Refresh") { refreshToken += 1 }
+                    CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh)) { refreshToken += 1 }
                 }
             }
         },
@@ -1464,7 +1464,7 @@ private fun CrossSiteAiSummaryScreen(
                                 HorizontalDivider(Modifier.padding(vertical = 10.dp))
                                 section.posts.forEach { thread ->
                                     Text(
-                                        text = thread.title.ifBlank { "Untitled thread" },
+                                        text = thread.title.ifBlank { stringResource(R.string.untitled_thread) },
                                         color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.fillMaxWidth().clickable { onThreadClick(section.site, thread) }.padding(vertical = 4.dp),
                                         maxLines = 1,
@@ -2097,7 +2097,10 @@ private fun CommunityRow(community: Community, onClick: () -> Unit) {
         Text(community.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(community.description.ifBlank { community.category }, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(6.dp))
-        Text("${community.activeToday} active today · ${community.onlineNow} online", style = MaterialTheme.typography.labelMedium)
+        Text(
+            stringResource(R.string.community_activity, community.activeToday, community.onlineNow),
+            style = MaterialTheme.typography.labelMedium,
+        )
     }
 }
 
@@ -2233,7 +2236,7 @@ private fun ThreadListStatusHeader(site: ForumSite, community: Community, visibl
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        threadListStatusSubtitle(site, community),
+                        threadListStatusSubtitle(site, community, stringResource(R.string.recommendations)),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -2253,14 +2256,14 @@ private fun ThreadListStatusHeader(site: ForumSite, community: Community, visibl
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThreadStateChip(text = "$visibleCount visible", color = MaterialTheme.colorScheme.primary)
+                ThreadStateChip(text = stringResource(R.string.visible_count, visibleCount), color = MaterialTheme.colorScheme.primary)
                 when {
                     site == ForumSite.Zhihu && community.id == "recommend" -> {
-                        ThreadStateChip(text = "read hidden", color = Color(0xFF2E7D32))
-                        ThreadStateChip(text = "fetches to 10", color = Color(0xFFF57C00))
+                        ThreadStateChip(text = stringResource(R.string.read_hidden), color = Color(0xFF2E7D32))
+                        ThreadStateChip(text = stringResource(R.string.fetches_to_10), color = Color(0xFFF57C00))
                     }
-                    site.requiresLogin -> ThreadStateChip(text = "session checked", color = Color(0xFF2E7D32))
-                    else -> ThreadStateChip(text = "public source", color = Color(0xFF7E57C2))
+                    site.requiresLogin -> ThreadStateChip(text = stringResource(R.string.session_checked), color = Color(0xFF2E7D32))
+                    else -> ThreadStateChip(text = stringResource(R.string.public_source), color = Color(0xFF7E57C2))
                 }
             }
         }
@@ -2288,9 +2291,9 @@ private fun ThreadListEmptyView(site: ForumSite, community: Community, onRefresh
                 Icon(FeedflowIconMap.symbol("tray"), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("No visible threads", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.no_visible_threads), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "${site.displayName} returned no visible posts for ${community.name}.",
+                    stringResource(R.string.no_visible_threads_detail, site.displayName, community.name),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -2483,7 +2486,7 @@ private fun ThreadDetailActionToolbar(
             ) {
                 Icon(
                     imageVector = if (loadedFromCache) Icons.Default.Bookmarks else Icons.Default.CheckCircle,
-                    contentDescription = if (loadedFromCache) "Local Content" else "Latest Content",
+                    contentDescription = if (loadedFromCache) stringResource(R.string.local_content) else stringResource(R.string.latest_content),
                     tint = if (loadedFromCache) Color(0xFFF57C00) else Color(0xFF2E7D32),
                     modifier = Modifier.size(14.dp),
                 )
@@ -2501,7 +2504,7 @@ private fun ThreadDetailActionToolbar(
                 onClick = onToggleBookmark,
             )
             CircularToolbarIcon(FeedflowIconMap.symbol("square.and.arrow.up"), stringResource(R.string.share), onShare)
-            CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), "AI Summary", onAiSummary)
+            CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), stringResource(R.string.ai_summary_action), onAiSummary)
             CircularToolbarIcon(FeedflowIconMap.symbol("safari.fill"), stringResource(R.string.browser), onOpenBrowser)
             CircularToolbarIcon(FeedflowIconMap.symbol("arrow.up.forward.app"), stringResource(R.string.open_in_browser), onOpenExternal)
             CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.select_community), onHome)
@@ -2509,9 +2512,9 @@ private fun ThreadDetailActionToolbar(
     }
 }
 
-private fun threadListStatusSubtitle(site: ForumSite, community: Community): String =
+private fun threadListStatusSubtitle(site: ForumSite, community: Community, recommendationsLabel: String): String =
     if (site == ForumSite.Zhihu && community.id == "recommend") {
-        "${site.displayName} · recommendations"
+        "${site.displayName} · $recommendationsLabel"
     } else {
         "${site.displayName} · ${community.category}"
     }
@@ -2640,7 +2643,7 @@ private fun LoginSiteChip(site: ForumSite, selected: Boolean, signedIn: Boolean,
             Text(site.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
             Icon(
                 imageVector = if (signedIn) Icons.Default.CheckCircle else Icons.Default.Login,
-                contentDescription = if (signedIn) "Signed in" else "Signed out",
+                contentDescription = if (signedIn) stringResource(R.string.signed_in_accessibility) else stringResource(R.string.signed_out_accessibility),
                 modifier = Modifier.size(14.dp),
                 tint = if (signedIn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
             )
@@ -2769,10 +2772,10 @@ private fun ScreenToolbar(
 ) {
     ToolbarCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), "Back", onBack)
+            CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
             Text(title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
             actions()
-            CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), "Home", onHome)
+            CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.home), onHome)
         }
     }
 }
@@ -2928,7 +2931,7 @@ private fun AvatarView(avatar: String, fallbackText: String, sizeDp: Int) {
         if (AvatarRenderingPolicy.isRemoteAvatar(avatar)) {
             coil.compose.SubcomposeAsyncImage(
                 model = avatar,
-                contentDescription = "$fallbackText avatar",
+                contentDescription = stringResource(R.string.avatar_for, fallbackText),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
                 loading = { Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) },
