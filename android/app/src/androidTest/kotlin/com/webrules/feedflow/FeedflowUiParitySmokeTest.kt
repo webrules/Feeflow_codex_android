@@ -45,10 +45,20 @@ class FeedflowUiParitySmokeTest {
         listOf("RSS Feeds", "Hacker News", "4D4Y", "V2EX", "Linux.do", "知乎").forEach { label ->
             compose.onNodeWithContentDescription("Site $label").performScrollTo().assertIsDisplayed()
         }
-        listOf("Login", "Settings", "Bookmarks", "AI", "Communities", "RSS", "Theme").forEach { description ->
+        listOf("Login", "Settings", "Bookmarks", "AI", "Communities", "Theme").forEach { description ->
             compose.onNodeWithContentDescription(description).assertIsDisplayed()
         }
         compose.onNodeWithText("EN").assertIsDisplayed()
+    }
+
+    @Test fun rssCommunitiesExposeFeedManagerAndDailySummaryActions() {
+        compose.onNodeWithContentDescription("Site RSS Feeds").performScrollTo().performClick()
+        compose.waitUntil(timeoutMillis = 10_000) {
+            compose.onAllNodesWithContentDescription("Community row").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Daily Summary").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Manage Feeds").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Refresh").assertIsDisplayed()
     }
 
     @Test fun loginSettingsAndBookmarksRoutesRenderModalContent() {

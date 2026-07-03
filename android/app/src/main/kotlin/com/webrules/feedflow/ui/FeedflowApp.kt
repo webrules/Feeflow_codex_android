@@ -354,7 +354,6 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             onBookmarks = { route = FeedflowRoute.Bookmarks },
             onAi = { route = FeedflowRoute.CrossSiteAi },
             onCommunityConfig = { route = FeedflowRoute.CommunityConfig },
-            onRssManager = { route = FeedflowRoute.RssManager },
             onSearch = { site, query -> route = FeedflowRoute.SearchResults(site, query) },
             onTheme = {
                 darkTheme = !darkTheme
@@ -366,8 +365,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             },
         )
         is FeedflowRoute.Communities -> {
+            var refreshToken by remember(current.site) { mutableStateOf(0) }
             var content by remember(current.site) { mutableStateOf(appStateController.communities(current.site)) }
-            LaunchedEffect(current.site) {
+            LaunchedEffect(current.site, refreshToken) {
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshCommunities(current.site)
             }
@@ -378,6 +378,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 isLoading = content.isLoading,
                 warning = content.warning,
                 onBack = { route = FeedflowRoute.SiteList },
+                onHome = { route = FeedflowRoute.SiteList },
+                onRefresh = { refreshToken += 1 },
+                onDailySummary = { route = FeedflowRoute.DailyRssSummary },
+                onFeedManager = { route = FeedflowRoute.RssManager },
                 onCommunityClick = { route = FeedflowRoute.Threads(current.site, it) },
             )
         }
@@ -643,7 +647,6 @@ private fun SiteListScreen(
     onBookmarks: () -> Unit,
     onAi: () -> Unit,
     onCommunityConfig: () -> Unit,
-    onRssManager: () -> Unit,
     onSearch: (ForumSite, String) -> Unit,
     onTheme: () -> Unit,
     onLanguage: () -> Unit,
@@ -659,7 +662,6 @@ private fun SiteListScreen(
                 onBookmarks = onBookmarks,
                 onAi = onAi,
                 onCommunityConfig = onCommunityConfig,
-                onRssManager = onRssManager,
                 onTheme = onTheme,
                 onLanguage = onLanguage,
             )
@@ -711,9 +713,28 @@ private fun CommunitiesScreen(
     isLoading: Boolean,
     warning: String?,
     onBack: () -> Unit,
+    onHome: () -> Unit,
+    onRefresh: () -> Unit,
+    onDailySummary: () -> Unit,
+    onFeedManager: () -> Unit,
     onCommunityClick: (Community) -> Unit,
 ) {
-    Scaffold(bottomBar = { ScreenToolbar(title = site.displayName, onBack = onBack, onHome = onBack) }) { padding ->
+    Scaffold(
+        bottomBar = {
+            ScreenToolbar(
+                title = site.displayName,
+                onBack = onBack,
+                onHome = onHome,
+                actions = {
+                    if (site == ForumSite.Rss) {
+                        CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), stringResource(R.string.daily_summary), onDailySummary)
+                        CircularToolbarIcon(FeedflowIconMap.symbol("list.bullet.rectangle.portrait.fill"), stringResource(R.string.manage_feeds), onFeedManager)
+                    }
+                    CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
+                },
+            )
+        },
+    ) { padding ->
         ForumBackground(Modifier.padding(padding)) {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
@@ -2785,7 +2806,6 @@ private fun HomeToolbar(
     onBookmarks: () -> Unit,
     onAi: () -> Unit,
     onCommunityConfig: () -> Unit,
-    onRssManager: () -> Unit,
     onTheme: () -> Unit,
     onLanguage: () -> Unit,
 ) {
@@ -2799,7 +2819,6 @@ private fun HomeToolbar(
             }
             Row {
                 ToolbarIcon(FeedflowIconMap.symbol("square.grid.2x2.fill"), "Communities", onCommunityConfig)
-                ToolbarIcon(FeedflowIconMap.symbol("list.bullet.rectangle.portrait.fill"), "RSS", onRssManager)
                 ToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), "Theme", onTheme)
                 TextButton(onClick = onLanguage, modifier = Modifier.size(44.dp)) {
                     Text(if (language == "en") "EN" else "中", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
