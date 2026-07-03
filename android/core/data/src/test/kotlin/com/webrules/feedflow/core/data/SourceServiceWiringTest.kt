@@ -97,7 +97,7 @@ class SourceServiceWiringTest {
         ))
         val httpClient = SourceFixtureHttpClient(
             "https://www.4d4y.com/forum/index.php?sid=SID123" to """<a href="forumdisplay.php?fid=7&sid=SID123"><span>技术交流</span></a><a href="logging.php?action=logout">退出</a>""",
-            "https://www.4d4y.com/forum/forumdisplay.php?fid=7&page=1&sid=SID123" to """
+            "https://www.4d4y.com/forum/forumdisplay.php?fid=7&sid=SID123" to """
                 <tbody id="normalthread_99">
                   <a href="viewthread.php?tid=99">GB18030 topic</a>
                   <a href="space.php?uid=123">alice</a>
@@ -194,7 +194,7 @@ class SourceServiceWiringTest {
                     <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
                 </body></html>
             """,
-            "https://www.4d4y.com/forum/forumdisplay.php?fid=2&page=1&sid=abc123xyz" to """
+            "https://www.4d4y.com/forum/forumdisplay.php?fid=2&sid=abc123xyz" to """
                 <tbody id="normalthread_88">
                   <a href="viewthread.php?tid=88">Protected topic</a>
                   <a href="space.php?uid=321">member</a>
@@ -209,6 +209,55 @@ class SourceServiceWiringTest {
         assertEquals("abc123xyz", store.getSetting("4d4y_sid"))
         val threads = service.fetchCategoryThreads("2", categories, 1)
         assertEquals("Protected topic", threads.single().title)
+    }
+
+    @Test fun fourD4YAuthenticatedCategoriesIncludeMemberOnlyCategoryAndFallbackThreads() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.4d4y.com/forum/index.php" to """
+                <html><body>
+                    <a class="forumtitle" href="forum.php?mod=forumdisplay&amp;fid=35&amp;sid=SID123"><span><strong>Category</strong></span></a>
+                    <a href="forumdisplay.php?fid=2&amp;sid=SID123"><span>Discovery</span></a>
+                    <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                </body></html>
+            """,
+            "https://www.4d4y.com/forum/index.php?sid=SID123" to """
+                <html><body>
+                    <a class="forumtitle" href="forum.php?mod=forumdisplay&amp;fid=35&amp;sid=SID123"><span><strong>Category</strong></span></a>
+                    <a href="forumdisplay.php?fid=2&amp;sid=SID123"><span>Discovery</span></a>
+                    <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                </body></html>
+            """,
+            "https://www.4d4y.com/forum/forumdisplay.php?fid=35&sid=SID123" to """
+                <table>
+                  <tr>
+                    <th>
+                      <a href="viewthread.php?tid=901&amp;extra=page%3D1"><span>Member-only topic</span></a>
+                      <a href="space.php?uid=654">member</a>
+                    </th>
+                    <td class="nums"><strong>12</strong><em>34</em></td>
+                    <td class="lastpost"><cite>2026-07-03 10:20</cite><em><a href="space.php?uid=777">lastPoster</a></em></td>
+                  </tr>
+                </table>
+            """,
+        )
+        val service = FourD4YService(store = store, httpClient = httpClient)
+
+        assertTrue(service.restoreSession())
+        val categories = service.fetchCategories()
+        assertEquals(listOf("35", "2"), categories.map { it.id })
+        assertEquals(listOf("Category", "Discovery"), categories.map { it.name })
+        assertEquals("SID123", store.getSetting("4d4y_sid"))
+        val threads = service.fetchCategoryThreads("35", categories, 1)
+
+        assertTrue(httpClient.lastGetUrl.startsWith("https://www.4d4y.com/forum/forumdisplay.php?fid=35&sid=SID123&_t="))
+        assertEquals("Member-only topic", threads.single().title)
+        assertEquals("654", threads.single().author.id)
+        assertEquals("member", threads.single().author.username)
+        assertEquals(12, threads.single().commentCount)
+        assertEquals("2026-07-03 10:20", threads.single().lastPostTime)
+        assertEquals("lastPoster", threads.single().lastPosterName)
     }
 
     @Test fun fourD4YRestoreSessionStoresLoggedInUsernameForDeleteGating() = runBlocking {
@@ -380,13 +429,19 @@ class SourceServiceWiringTest {
 }
 
 private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, String>) : FeedflowHttpClient {
+    var lastGetUrl: String = ""
     var lastPostUrl: String = ""
     var lastPostBody: String = ""
     var lastCookieHeader: String = ""
     var lastContentType: String = ""
 
-    override suspend fun get(url: String, cookies: List<FeedflowCookie>): String =
-        fixtures.firstOrNull { (fixtureUrl, _) -> fixtureUrl == url }?.second ?: error("Missing fixture for $url")
+    override suspend fun get(url: String, cookies: List<FeedflowCookie>): String {
+        lastGetUrl = url
+        lastCookieHeader = cookies.joinToString("; ") { "${it.name}=${it.value}" }
+        return fixtures.firstOrNull { (fixtureUrl, _) -> fixtureUrl == url }?.second
+            ?: fixtures.firstOrNull { (fixtureUrl, _) -> fixtureUrl == url.withoutTimestampCacheBuster() }?.second
+            ?: error("Missing fixture for $url")
+    }
 
     override suspend fun post(url: String, body: String, cookies: List<FeedflowCookie>, contentType: String): String {
         lastPostUrl = url
@@ -396,3 +451,8 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
         return "ok"
     }
 }
+
+private fun String.withoutTimestampCacheBuster(): String =
+    replace(Regex("""[&?]_t=\d+""")) { match ->
+        if (match.value.startsWith("?")) "?" else ""
+    }.trimEnd('?', '&')

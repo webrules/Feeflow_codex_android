@@ -471,10 +471,16 @@ class FourD4YService(
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
         val cookies = authCookies()
-        val html = fetch(withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId&page=$page", cookies), cookies)
+        if (store?.getSetting("4d4y_sid").isNullOrBlank() && cookies.none { it.name.equals("sid", ignoreCase = true) }) {
+            fetchCategories()
+        }
+        val html = fetch(categoryUrl(categoryId, page, cookies), cookies)
         rememberAuthenticatedPageArtifacts(html)
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "4D4Y", 0, 0)
-        return FourD4YParser.parseThreadRows(html, community)
+        val threads = FourD4YParser.parseThreadRows(html, community)
+        if (threads.isNotEmpty() || page != 1) return threads
+        rememberAuthenticatedPageArtifacts(fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies))
+        return FourD4YParser.parseThreadRows(fetch(categoryUrl(categoryId, page, cookies), cookies), community)
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
@@ -499,6 +505,16 @@ class FourD4YService(
         return "$url${separator}sid=${sid.formEncode()}"
     }
 
+    private fun categoryUrl(
+        categoryId: String,
+        page: Int,
+        cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
+    ): String {
+        val base = withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=$categoryId", cookies)
+        val pageParam = if (page > 1) "&page=$page" else ""
+        return "$base$pageParam&_t=${Instant.now().epochSecond}"
+    }
+
     private fun validateSessionHtml(html: String): Boolean {
         val forums = FourD4YParser.parseCategories(html)
         val lower = html.lowercase()
@@ -506,7 +522,7 @@ class FourD4YService(
         val hasLogin = (lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
         val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
         val hasDiscovery = forums.any { it.name == "Discovery" }
-        return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery)
+        return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery || forums.size > 1)
     }
 
     private fun rememberAuthenticatedPageArtifacts(html: String) {
