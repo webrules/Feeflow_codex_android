@@ -62,15 +62,22 @@ class AuthSessionFoundationTest {
         val coordinator = AuthSessionCoordinator(store, nowMillis = { now })
         coordinator.captureHeaderSession(ForumSite.HackerNews, "user=alice")
         coordinator.captureHeaderSession(ForumSite.Zhihu, "z_c0=abc")
+        coordinator.captureHeaderSession(ForumSite.FourD4Y, "cdb_auth=abc")
         store.saveSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${ForumSite.Zhihu.serviceId}_username", "alice")
         store.saveSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${ForumSite.Zhihu.serviceId}_password", "secret")
+        store.saveSetting("4d4y_sid", "sid")
+        store.saveSetting("detected_4d4y_username", "alice")
 
         coordinator.logout(ForumSite.Zhihu)
+        coordinator.logout(ForumSite.FourD4Y)
 
         assertFalse(coordinator.restoreSession(ForumSite.Zhihu))
+        assertFalse(coordinator.restoreSession(ForumSite.FourD4Y))
         assertTrue(coordinator.restoreSession(ForumSite.HackerNews))
         assertNull(store.getSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${ForumSite.Zhihu.serviceId}_username"))
         assertNull(store.getSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${ForumSite.Zhihu.serviceId}_password"))
+        assertNull(store.getSetting("4d4y_sid"))
+        assertNull(store.getSetting("detected_4d4y_username"))
     }
 
     @Test fun zhihuServiceRestoreSessionRequiresSavedAuthCookies() = kotlinx.coroutines.runBlocking {

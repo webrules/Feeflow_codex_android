@@ -500,9 +500,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
         }
         FeedflowRoute.Login -> LoginScreen(
             signedInSites = homeState.signedInSites,
-            onLogout = {
-                store.clearCookies(it.serviceId)
-                appStateController.setSignedIn(it, false)
+            onLogout = { site ->
+                SiteLoginConfig.forSite(site)?.let(cookieBridge::clearSiteCookies)
+                authCoordinator.logout(site)
+                appStateController.setSignedIn(site, false)
                 homeState = appStateController.homeState
             },
             onWebLogin = { route = FeedflowRoute.WebLogin(it) },
@@ -1882,9 +1883,9 @@ private fun InAppBrowserScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 factory = { context ->
                     WebView(context).apply {
+                        cookieBridge.configure(this)
                         SiteLoginConfig.forSite(ForumSite.entries.firstOrNull { site -> SiteLoginConfig.forSite(site)?.shouldCheckCookies(url) == true } ?: ForumSite.Rss)
                             ?.let { cookieBridge.installCookies(it, storedCookies) }
-                        cookieBridge.configure(this)
                         webViewRef = this
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true

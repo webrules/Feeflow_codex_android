@@ -63,6 +63,10 @@ class AuthSessionCoordinator(
         store.clearCookies(site.serviceId)
         store.removeSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${site.serviceId}_username")
         store.removeSetting("${FeedflowDatabaseContract.cookieSettingPrefix}${site.serviceId}_password")
+        if (site == ForumSite.FourD4Y) {
+            store.removeSetting("4d4y_sid")
+            store.removeSetting("detected_4d4y_username")
+        }
         rejectedSignatures.remove(site)
     }
 
