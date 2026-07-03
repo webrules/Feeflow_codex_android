@@ -22,8 +22,21 @@ class PostingStateParityTest {
     @Test fun replyComposerFormatsOptionalQuoteTarget() {
         assertEquals("Plain reply", ReplyComposerState(content = " Plain reply ").formattedContent())
         assertEquals(
-            "> @alice: c1\n\nThanks",
-            ReplyComposerState(content = "Thanks", replyingToCommentId = "c1", replyingToUsername = "alice").formattedContent(),
+            "[quote][b]alice said:[/b]\nOriginal comment[/quote]\n\nThanks",
+            ReplyComposerState(
+                content = "Thanks",
+                replyingToCommentId = "c1",
+                replyingToUsername = "alice",
+                replyingToContent = "Original comment",
+            ).formattedContent(),
+        )
+        assertEquals(
+            "[quote][b]alice 说:[/b]\nOriginal comment[/quote]\n\nThanks",
+            ReplyComposerState(
+                content = "Thanks",
+                replyingToUsername = "alice",
+                replyingToContent = "Original comment",
+            ).formattedContent("说"),
         )
         assertFalse(ReplyComposerState(content = "", replyingToUsername = "alice").canReply)
         assertTrue(ReplyComposerState(content = "ok", replyingToUsername = "alice").canReply)

@@ -817,6 +817,7 @@ private fun ThreadDetailScreen(
     var showingDeleteConfirmation by remember(thread.id) { mutableStateOf(false) }
     var postedReplies by remember(thread.id) { mutableStateOf(emptyList<Comment>()) }
     val justNow = stringResource(R.string.just_now)
+    val saidLabel = stringResource(R.string.said)
     val renderedComments = comments + postedReplies
     LaunchedEffect(thread.id) { ttsController.stop(); speech = speech.stop() }
     fun toggleSpeech() {
@@ -899,7 +900,7 @@ private fun ThreadDetailScreen(
                         IconButton(
                             enabled = replyState.canReply,
                             onClick = {
-                                val formatted = replyState.formattedContent()
+                                val formatted = replyState.formattedContent(saidLabel)
                                 replyState = replyState.copy(isPosting = true, errorMessage = null)
                                 scope.launch {
                                     val error = postController.postComment(site, thread, formatted)
@@ -1019,7 +1020,11 @@ private fun ThreadDetailScreen(
                                 canReply = site.supportsCommenting,
                                 hideAvatar = site == ForumSite.HackerNews,
                                 onReply = {
-                                    replyState = replyState.copy(replyingToCommentId = comment.id, replyingToUsername = comment.author.username)
+                                    replyState = replyState.copy(
+                                        replyingToCommentId = comment.id,
+                                        replyingToUsername = comment.author.username,
+                                        replyingToContent = comment.content,
+                                    )
                                 },
                             )
                             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f))

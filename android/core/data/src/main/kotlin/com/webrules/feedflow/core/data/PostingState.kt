@@ -17,17 +17,18 @@ data class ReplyComposerState(
     val content: String = "",
     val replyingToCommentId: String? = null,
     val replyingToUsername: String? = null,
+    val replyingToContent: String? = null,
     val isPosting: Boolean = false,
     val errorMessage: String? = null,
 ) {
     val canReply: Boolean
         get() = content.isNotBlank() && !isPosting
 
-    fun formattedContent(): String =
+    fun formattedContent(saidLabel: String = "said"): String =
         if (replyingToUsername.isNullOrBlank()) {
             content.trim()
         } else {
-            "> @${replyingToUsername}: ${replyingToCommentId.orEmpty()}\n\n${content.trim()}"
+            "[quote][b]${replyingToUsername} $saidLabel:[/b]\n${replyingToContent.orEmpty()}[/quote]\n\n${content.trim()}"
         }
 }
 
