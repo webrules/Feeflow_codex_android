@@ -304,10 +304,33 @@ struct ZhihuHotListItem: Codable {
         case cardId = "card_id"
         case detailText = "detail_text"
     }
+
+    var questionId: String? {
+        if let cardId, cardId.hasPrefix("Q_") {
+            let value = String(cardId.dropFirst(2))
+            if !value.isEmpty, value.allSatisfy(\.isNumber) { return value }
+        }
+        if let targetId = target?.id { return String(targetId) }
+        if let url = target?.url,
+           let questionIndex = url.split(separator: "/").firstIndex(where: { $0 == "question" || $0 == "questions" }) {
+            let parts = url.split(separator: "/")
+            let idIndex = parts.index(after: questionIndex)
+            if idIndex < parts.endIndex {
+                let value = String(parts[idIndex].prefix { $0.isNumber })
+                if !value.isEmpty { return value }
+            }
+        }
+        if let id, !id.isEmpty, id.allSatisfy(\.isNumber) { return id }
+        return nil
+    }
 }
 
 struct ZhihuHotListTarget: Codable {
     let id: Int?
+    let title: String?
+    let excerpt: String?
+    let detail: String?
+    let author: ZhihuAuthor?
     let titleArea: ZhihuTextArea?
     let excerptArea: ZhihuTextArea?
     let imageArea: ZhihuImageArea?
@@ -317,7 +340,7 @@ struct ZhihuHotListTarget: Codable {
     let metricsArea: ZhihuMetricsArea?
 
     enum CodingKeys: String, CodingKey {
-        case id, url, type, created
+        case id, title, excerpt, detail, author, url, type, created
         case titleArea = "title_area"
         case excerptArea = "excerpt_area"
         case imageArea = "image_area"
@@ -579,8 +602,8 @@ class ZhihuService: ForumService {
     private var nextPageURL: String?
     private var currentFeedItems: [ZhihuFeedItem] = []
 
-    // Cache question data from hot list/feed (title, excerpt) for detail fallback
-    private var questionDataCache: [String: (title: String, excerpt: String)] = [:]
+    // Cache question data from hot list/feed for detail fallback.
+    private var questionDataCache: [String: (title: String, excerpt: String, author: ZhihuAuthor?)] = [:]
 
     // Downvoted item IDs (persisted via DatabaseManager)
     private var downvotedIds: Set<String> = []
@@ -993,24 +1016,25 @@ class ZhihuService: ForumService {
                 return nil
             }
 
-            // Extract question ID from cardId (format: "Q_12345678")
-            let questionId: String
-            if let cardId = item.cardId, cardId.hasPrefix("Q_") {
-                questionId = String(cardId.dropFirst(2))
-            } else {
-                questionId = item.id ?? UUID().uuidString
+            guard let questionId = item.questionId else {
+                AppLogger.debug("[Zhihu] Hot item #\(index): no question ID, skipped")
+                return nil
             }
 
             let threadId = "question_\(questionId)"
-            let title = target.titleArea?.text ?? "Untitled"
+            let title = [target.titleArea?.text, target.title]
+                .compactMap { $0 }
+                .first { !$0.isEmpty } ?? "Untitled"
             AppLogger.debug("[Zhihu] Hot item #\(index): id=\(threadId), title=\(String(title.prefix(30)))")
 
             // Use excerpt_area.text or first child's excerpt
-            let excerpt = target.excerptArea?.text ?? item.children?.first?.excerpt ?? ""
-            let childAuthor = item.children?.first?.author
+            let excerpt = [target.excerptArea?.text, target.excerpt, target.detail, item.children?.first?.excerpt]
+                .compactMap { $0 }
+                .first { !$0.isEmpty } ?? ""
+            let childAuthor = target.author ?? item.children?.first?.author
 
             // Cache question data for detail view fallback
-            questionDataCache[questionId] = (title: title, excerpt: excerpt)
+            questionDataCache[questionId] = (title: title, excerpt: excerpt, author: childAuthor)
 
             // Heat text like "123万热度"
             let heatText = item.detailText ?? ""
@@ -1184,7 +1208,7 @@ class ZhihuService: ForumService {
         var apiSuccess = false
 
         // Try v4 API first
-        let urlStr = "\(questionDetailBase)/\(questionId)?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics"
+        let urlStr = "\(questionDetailBase)/\(questionId)?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author"
         if let url = URL(string: urlStr) {
             let request = buildRequest(url: url)
             if let (data, response) = try? await URLSession.shared.data(for: request) {
@@ -1211,11 +1235,23 @@ class ZhihuService: ForumService {
             }
         }
 
-        // Fallback: use cached data from hot list
-        if !apiSuccess, let cached = questionDataCache[questionId] {
-            title = cached.title
-            detail = cached.excerpt
-            AppLogger.debug("[Zhihu] Using cached question data: title='\(title)'")
+        // Fill any missing API fields from the selected hot-list card.
+        if let cached = questionDataCache[questionId] {
+            if !apiSuccess || title.isEmpty || title == "问题" {
+                title = cached.title
+            }
+            if detail.isEmpty {
+                detail = cached.excerpt
+            }
+            if authorName.isEmpty, let cachedAuthor = cached.author {
+                authorName = cachedAuthor.name ?? ""
+                authorAvatar = avatarURL(from: cachedAuthor)
+                authorId = cachedAuthor.id ?? cachedAuthor.urlToken ?? ""
+                authorHeadline = cachedAuthor.headline
+            }
+            if !apiSuccess {
+                AppLogger.debug("[Zhihu] Using cached question data: title='\(title)'")
+            }
         }
 
         let thread = Thread(
@@ -1290,7 +1326,7 @@ class ZhihuService: ForumService {
 
     private func fetchQuestionAnswers(questionId: String, page: Int) async throws -> [Comment] {
         let offset = (page - 1) * 10
-        let urlStr = "\(questionDetailBase)/\(questionId)/answers?include=content,voteup_count,comment_count&limit=10&offset=\(offset)&sort_by=default"
+        let urlStr = "\(questionDetailBase)/\(questionId)/answers?include=content,voteup_count,comment_count,author&limit=10&offset=\(offset)&sort_by=default"
         guard let url = URL(string: urlStr) else { return [] }
 
         let request = buildRequest(url: url)

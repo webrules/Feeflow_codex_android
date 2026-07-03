@@ -1287,26 +1287,19 @@ class ZhihuService(
         for (element in data) {
             val item = element.obj() ?: continue
             val target = item.obj("target") ?: continue
-            val cardId = item.str("card_id")
-            val questionId = if (cardId != null && cardId.startsWith("Q_")) {
-                cardId.removePrefix("Q_")
-            } else {
-                item.longId("id")?.toString() ?: continue
-            }
-            val title = target.obj("title_area").str("text") ?: "Untitled"
-            val childAuthor = item.arr("children")?.firstOrNull()?.obj()?.obj("author")
-            val excerpt = target.obj("excerpt_area").str("text")
-                ?: item.arr("children")?.firstOrNull()?.obj()?.str("excerpt")
-                ?: ""
+            val questionId = ZhihuParser.hotQuestionId(item, target) ?: continue
+            val title = ZhihuParser.hotTitle(item, target)
+            val excerpt = ZhihuParser.hotExcerpt(item, target)
+            val author = ZhihuParser.hotAuthor(item, target)
             questionDataCache[questionId] = title to excerpt
             val metrics = target.obj("metrics_area")
             threads += FeedThread(
                 id = "question_$questionId",
-                title = title.decodeHtmlEntities(),
-                content = excerpt.decodeHtmlEntities(),
-                author = ZhihuParser.author(childAuthor, fallbackName = "热榜"),
+                title = title,
+                content = excerpt,
+                author = ZhihuParser.author(author, fallbackName = "热榜"),
                 community = hotCommunity,
-                timeAgo = item.str("detail_text").orEmpty(),
+                timeAgo = item.str("detail_text") ?: metrics.str("text").orEmpty(),
                 likeCount = metrics.int("follower_count") ?: 0,
                 commentCount = metrics.int("answer_count") ?: 0,
                 tags = listOf("🔥 热榜"),
@@ -1357,7 +1350,7 @@ class ZhihuService(
 
     private suspend fun fetchQuestionDetail(questionId: String, page: Int): ThreadDetailResult {
         val url = "https://www.zhihu.com/api/v4/questions/$questionId" +
-            "?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics"
+            "?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author"
         val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
         val json = body?.let { ZhihuJson.parse(it)?.obj() }
         var title = "问题"
@@ -1365,17 +1358,16 @@ class ZhihuService(
         var commentCount = 0
         var answerCount = 0
         var author = ZhihuParser.author(null)
-        if (json != null && json.str("error") == null) {
+        if (json != null && json["error"] == null) {
             title = json.str("title") ?: title
             detail = json.str("detail") ?: json.str("excerpt") ?: ""
             commentCount = json.int("comment_count") ?: 0
             answerCount = json.int("answer_count") ?: 0
             author = ZhihuParser.author(json.obj("author"))
-        } else {
-            questionDataCache[questionId]?.let { (cachedTitle, cachedExcerpt) ->
-                title = cachedTitle
-                detail = cachedExcerpt
-            }
+        }
+        questionDataCache[questionId]?.let { (cachedTitle, cachedExcerpt) ->
+            if (title == "问题" || title.isBlank()) title = cachedTitle
+            if (detail.isBlank()) detail = cachedExcerpt
         }
         val thread = FeedThread(
             id = "question_$questionId",
@@ -1444,7 +1436,7 @@ class ZhihuService(
     private suspend fun fetchQuestionAnswers(questionId: String, page: Int): List<Comment> {
         val offset = (page - 1) * 10
         val url = "https://www.zhihu.com/api/v4/questions/$questionId/answers" +
-            "?include=content,voteup_count,comment_count&limit=10&offset=$offset&sort_by=default"
+            "?include=content,voteup_count,comment_count,author&limit=10&offset=$offset&sort_by=default"
         val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
         val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
         return data.mapNotNull { element ->

@@ -28,11 +28,21 @@ data class CacheFirstResult<T>(
 class FeedflowRepository(
     private val store: FeedflowStore = InMemoryFeedflowStore(),
     private val httpClient: FeedflowHttpClient = UrlConnectionFeedflowHttpClient(),
-    private val serviceFactory: (ForumSite) -> ForumService = { site -> site.makeService(store, httpClient) },
+    serviceFactory: ((ForumSite) -> ForumService)? = null,
     private val summaryClient: GeminiSummaryClient = GeminiRestSummaryClient(httpClient),
     private val prefetchDelay: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val summaryCoordinator = AiSummaryCoordinator(store)
+    private var zhihuService: ForumService? = null
+    private val serviceFactory: (ForumSite) -> ForumService = serviceFactory ?: { site ->
+        if (site == ForumSite.Zhihu) {
+            synchronized(this) {
+                zhihuService ?: site.makeService(store, httpClient).also { zhihuService = it }
+            }
+        } else {
+            site.makeService(store, httpClient)
+        }
+    }
 
     fun sites(): List<ForumSite> = ForumSite.entries
 

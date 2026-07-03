@@ -971,6 +971,53 @@ object HackerNewsContentCleaner {
             return (target.str("title") ?: "Untitled").decodeHtmlEntities()
         }
 
+        fun hotQuestionId(item: JsonObject, target: JsonObject): String? {
+            item.str("card_id")
+                ?.takeIf { it.startsWith("Q_") }
+                ?.removePrefix("Q_")
+                ?.takeIf { it.isNotBlank() && it.all(Char::isDigit) }
+                ?.let { return it }
+            (target.longId("id")?.toString() ?: target.str("id"))
+                ?.takeIf { it.isNotBlank() && it.all(Char::isDigit) }
+                ?.let { return it }
+            listOfNotNull(target.str("url"), item.str("url")).forEach { url ->
+                Regex("""/(?:question|questions)/(\d+)""")
+                    .find(url)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.let { return it }
+            }
+            return (item.longId("id")?.toString() ?: item.str("id"))
+                ?.takeIf { it.isNotBlank() && it.all(Char::isDigit) }
+        }
+
+        fun hotTitle(item: JsonObject, target: JsonObject): String =
+            listOfNotNull(
+                target.obj("title_area").str("text"),
+                target.str("title"),
+                target.obj("question").str("title"),
+                item.str("title"),
+            ).firstOrNull { it.isNotBlank() }?.decodeHtmlEntities() ?: "Untitled"
+
+        fun hotExcerpt(item: JsonObject, target: JsonObject): String {
+            val firstChild = item.arr("children")?.firstOrNull()?.obj()
+            return listOfNotNull(
+                target.obj("excerpt_area").str("text"),
+                target.str("excerpt"),
+                target.str("detail"),
+                firstChild.str("excerpt"),
+                firstChild.str("content"),
+            ).firstOrNull { it.isNotBlank() }?.let(::cleanHtml).orEmpty()
+        }
+
+        fun hotAuthor(item: JsonObject, target: JsonObject): JsonObject? {
+            val firstChild = item.arr("children")?.firstOrNull()?.obj()
+            return target.obj("author")
+                ?: firstChild.obj("author")
+                ?: firstChild.obj("target").obj("author")
+                ?: firstChild.obj("object").obj("author")
+        }
+
         fun filterReason(target: JsonObject): String? {
             val votes = target.int("voteup_count") ?: 0
             val author = target.obj("author")

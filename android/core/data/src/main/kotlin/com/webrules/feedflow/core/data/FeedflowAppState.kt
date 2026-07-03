@@ -188,20 +188,22 @@ class FeedflowAppStateController(
     private fun mergeDetailThread(fresh: FeedThread, current: FeedThread): FeedThread {
         val currentAuthor = current.author
         val freshAuthor = fresh.author
-        val resolvedAuthor = if (
-            AvatarRenderingPolicy.shouldUseFallback(freshAuthor.avatar) &&
-            !AvatarRenderingPolicy.shouldUseFallback(currentAuthor.avatar)
-        ) {
-            freshAuthor.copy(
-                id = freshAuthor.id.ifBlank { currentAuthor.id },
-                username = freshAuthor.username.takeUnless { it.isBlank() || it == "Unknown" } ?: currentAuthor.username,
-                avatar = currentAuthor.avatar,
-                role = freshAuthor.role ?: currentAuthor.role,
-            )
-        } else {
-            freshAuthor
-        }
+        val placeholderAuthors = setOf("", "Unknown", "Unknnow", "匿名用户", "匿名", "热榜")
+        val resolvedAuthor = freshAuthor.copy(
+            id = freshAuthor.id.ifBlank { currentAuthor.id },
+            username = freshAuthor.username
+                .takeUnless { it in placeholderAuthors && currentAuthor.username !in placeholderAuthors }
+                ?: currentAuthor.username,
+            avatar = freshAuthor.avatar.takeUnless {
+                AvatarRenderingPolicy.shouldUseFallback(it) &&
+                    !AvatarRenderingPolicy.shouldUseFallback(currentAuthor.avatar)
+            } ?: currentAuthor.avatar,
+            role = freshAuthor.role ?: currentAuthor.role,
+        )
+        val placeholderTitles = setOf("", "Untitled", "无标题", "问题", "知乎")
         return fresh.copy(
+            title = fresh.title.takeUnless { it in placeholderTitles && current.title !in placeholderTitles } ?: current.title,
+            content = fresh.content.ifBlank { current.content },
             author = resolvedAuthor,
             community = current.community,
             isLiked = current.isLiked,

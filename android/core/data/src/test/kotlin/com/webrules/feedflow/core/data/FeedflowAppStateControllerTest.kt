@@ -152,6 +152,37 @@ class FeedflowAppStateControllerTest {
         assertEquals("Last", loaded.value.thread.lastPosterName)
     }
 
+    @Test fun refreshDetailPreservesZhihuListFieldsWhenDetailReturnsPlaceholders() = runBlocking {
+        val community = Community("hot", "知乎热榜", "", "zhihu", 0, 0)
+        val listThread = FeedThread(
+            id = "question_123",
+            title = "真实问题标题",
+            content = "问题摘要",
+            author = User("author-1", "提问者", "https://pic.zhimg.com/author.jpg", "简介"),
+            community = community,
+            timeAgo = "765万热度",
+            likeCount = 10,
+            commentCount = 5,
+        )
+        val placeholderDetail = listThread.copy(
+            title = "问题",
+            content = "",
+            author = User("", "匿名用户", "", null),
+        )
+        val controller = FeedflowAppStateController(
+            FeedflowRepository(serviceFactory = { DetailService(placeholderDetail) }),
+        )
+
+        val loaded = controller.refreshDetail(ForumSite.Zhihu, listThread).value.thread
+
+        assertEquals("真实问题标题", loaded.title)
+        assertEquals("问题摘要", loaded.content)
+        assertEquals("author-1", loaded.author.id)
+        assertEquals("提问者", loaded.author.username)
+        assertEquals("https://pic.zhimg.com/author.jpg", loaded.author.avatar)
+        assertEquals("简介", loaded.author.role)
+    }
+
     @Test fun createThreadAndReplyDelegateToService() = runBlocking {
         val service = PostingService()
         val community = Community("general", "General", "", "v2ex", 0, 0)

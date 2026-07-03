@@ -537,19 +537,27 @@ class SourceServiceWiringTest {
         val service = ZhihuService(
             SourceFixtureHttpClient(
                 "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
-                    """{"data":[{"card_id":"Q_123","detail_text":"100万热度","target":{"title_area":{"text":"Hot question"},"excerpt_area":{"text":"Hot excerpt"},"metrics_area":{"follower_count":10,"answer_count":5}},"children":[{"author":{"name":"作者"}}]}]}""",
+                    """{"data":[{"id":"0_987","detail_text":"765万热度","target":{"id":123,"type":"question","url":"https://api.zhihu.com/questions/123","title":"Hot question","excerpt":"<b>Hot excerpt</b>","author":{"id":"author-1","name":"提问者","avatar_url":"https://pic.zhimg.com/author.jpg"},"metrics_area":{"follower_count":10,"answer_count":5}}}]}""",
                 "https://www.zhihu.com/api/v4/search_v3?q=android+parity&t=content&correction=1&offset=0&limit=20" to
                     """{"data":[{"object":{"type":"article","id":789,"title":"Search article","excerpt":"body","author":{"name":"A"}}}],"paging":{"is_end":true}}""",
                 "https://www.zhihu.com/api/v4/answers/456?include=content,html_content,excerpt,thanks_count,voteup_count,comment_count,visited_count,author" to
                     """{"content":"Answer body","voteup_count":3,"comment_count":1,"question":{"title":"Android parity"},"author":{"name":"Writer"}}""",
                 "https://www.zhihu.com/api/v4/answers/456/root_comments?limit=20&offset=0&order=normal&status=open" to
                     """{"data":[{"id":"c1","content":"Nice","created_time":0,"like_count":2,"author":{"member":{"name":"Reader"}}}]}""",
+                "https://www.zhihu.com/api/v4/questions/123?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author" to
+                    """{"id":123,"title":"Hot question detail","detail":"<p>Question body</p>","answer_count":1,"comment_count":2,"author":{"id":"author-1","name":"提问者","avatar_url_template":"//pic.zhimg.com/author_{size}.jpg"}}""",
+                "https://www.zhihu.com/api/v4/questions/123/answers?include=content,voteup_count,comment_count,author&limit=10&offset=0&sort_by=default" to
+                    """{"data":[{"id":999,"content":"<p>Top answer</p>","voteup_count":8,"author":{"id":"answerer","name":"回答者","avatar_url":"https://pic.zhimg.com/answerer.jpg"}}]}""",
             ),
         )
         val categories = service.fetchCategories()
         val hot = service.fetchCategoryThreads("hot", categories, 1)
         assertEquals("question_123", hot.single().id)
         assertEquals("Hot question", hot.single().title)
+        assertEquals("Hot excerpt", hot.single().content)
+        assertEquals("提问者", hot.single().author.username)
+        assertEquals("https://pic.zhimg.com/author.jpg", hot.single().author.avatar)
+        assertEquals("765万热度", hot.single().timeAgo)
 
         val search = service.searchThreads("android parity", 1)
         assertEquals("article_789", search.threads.single().id)
@@ -561,9 +569,41 @@ class SourceServiceWiringTest {
         assertEquals("Answer body", detail.thread.content)
         assertEquals("Nice", detail.comments.single().content)
         assertEquals("Reader", detail.comments.single().author.username)
+
+        val question = service.fetchThreadDetail("question_123", 1)
+        assertEquals("Hot question detail", question.thread.title)
+        assertEquals("Question body", question.thread.content)
+        assertEquals("提问者", question.thread.author.username)
+        assertEquals("https://pic.zhimg.com/author_80.jpg", question.thread.author.avatar)
+        assertEquals("Top answer", question.comments.single().content)
+        assertEquals("回答者", question.comments.single().author.username)
+        assertEquals("https://pic.zhimg.com/answerer.jpg", question.comments.single().author.avatar)
         assertFailsWith<FeedflowError.Parsing> { service.fetchThreadDetail("invalid", 1) }
         assertFailsWith<FeedflowError.Parsing> { service.fetchThreadDetail("video_456", 1) }
         Unit
+    }
+
+    @Test fun zhihuRepositoryKeepsHotMetadataForQuestionDetailFallback() = runBlocking {
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
+                """{"data":[{"card_id":"Q_321","target":{"title":"Cached hot title","excerpt":"Cached hot body"}}]}""",
+            "https://www.zhihu.com/api/v4/questions/321?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author" to
+                """{"error":{"code":101,"message":"身份未经过验证"}}""",
+            "https://www.zhihu.com/api/v4/questions/321/answers?include=content,voteup_count,comment_count,author&limit=10&offset=0&sort_by=default" to
+                """{"data":[]}""",
+        )
+        val repository = FeedflowRepository(
+            store = InMemoryFeedflowStore(),
+            httpClient = httpClient,
+        )
+        val community = Community("hot", "知乎热榜", "", "zhihu", 0, 0)
+
+        val hot = repository.loadThreads(ForumSite.Zhihu, community).fresh!!.single()
+        val detail = repository.loadThreadDetail(ForumSite.Zhihu, hot).fresh!!.first
+
+        assertEquals("question_321", hot.id)
+        assertEquals("Cached hot title", detail.title)
+        assertEquals("Cached hot body", detail.content)
     }
 
     @Test fun zhihuServiceMarksRecommendationsReadAndSendsNotInterestedPayload() = runBlocking {
