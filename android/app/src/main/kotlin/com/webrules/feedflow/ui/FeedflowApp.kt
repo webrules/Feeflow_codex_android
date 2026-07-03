@@ -128,6 +128,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -3174,6 +3175,7 @@ private fun SiteIcon(site: ForumSite, size: androidx.compose.ui.unit.Dp = 54.dp)
     Box(
         modifier = Modifier
             .size(size)
+            .shadow(10.dp, CircleShape, clip = false, ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f), spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
             .clip(CircleShape)
             .background(MaterialTheme.colorScheme.primary)
             .border(1.dp, Color.White.copy(alpha = 0.24f), CircleShape),
