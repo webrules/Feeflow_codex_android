@@ -183,11 +183,28 @@ data class PrefetchDecisionInput(
     val site: ForumSite,
     val detailCached: Boolean,
     val queueSize: Int,
-    val maxQueueSize: Int = 6,
+    val maxQueueSize: Int = BackgroundPrefetchPolicy.maxQueueSize,
 )
 
+object BackgroundPrefetchPolicy {
+    const val settingKey = "background_prefetch_enabled"
+    const val legacySettingKey = "background_prefetch"
+    const val defaultEnabled = false
+    const val maxQueueSize = 5
+    const val debounceMillis = 400L
+    const val interItemDelayMillis = 1_000L
+
+    fun loadEnabled(store: FeedflowStore): Boolean {
+        store.getSetting(settingKey)?.toBooleanStrictOrNull()?.let { return it }
+        val legacyValue = store.getSetting(legacySettingKey)?.toBooleanStrictOrNull() ?: return defaultEnabled
+        store.saveSetting(settingKey, legacyValue.toString())
+        store.removeSetting(legacySettingKey)
+        return legacyValue
+    }
+}
+
 object PrefetchGate {
-    private val allowlisted = setOf(ForumSite.Rss, ForumSite.HackerNews, ForumSite.V2ex, ForumSite.LinuxDo)
+    private val allowlisted = ForumSite.entries.toSet()
 
     fun shouldPrefetch(input: PrefetchDecisionInput): Boolean =
         input.enabled &&

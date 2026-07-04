@@ -39,8 +39,13 @@ object AvatarRenderingPolicy {
 }
 
 object ThreadRowRenderingPolicy {
-    fun hidesAvatar(site: ForumSite): Boolean = site == ForumSite.Rss || site == ForumSite.HackerNews
+    fun hidesAvatar(site: ForumSite, communityId: String? = null): Boolean =
+        site == ForumSite.Rss ||
+            site == ForumSite.HackerNews ||
+            (site == ForumSite.Zhihu && communityId == "hot")
     fun hidesBadgeRow(site: ForumSite): Boolean = site == ForumSite.Zhihu || site == ForumSite.HackerNews
+    fun supportsNotInterested(site: ForumSite, communityId: String): Boolean =
+        site == ForumSite.Zhihu && communityId == "recommend"
     fun normalizedLastPostTime(value: String?): String? =
         value?.replace(Regex("""^\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*"""), "")?.ifBlank { null }
 }

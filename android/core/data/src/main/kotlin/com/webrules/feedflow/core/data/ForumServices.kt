@@ -386,6 +386,7 @@ internal val FOURD4Y_HEADERS = mapOf(
     "Cache-Control" to "no-cache",
     "Pragma" to "no-cache",
 )
+private const val FOURD4Y_FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 
 class DiscourseService(
     private val store: FeedflowStore? = null,
@@ -398,6 +399,19 @@ class DiscourseService(
     override val supportsCommenting = true
     override val supportsThreadCreation = true
     override fun canCreateThread(community: Community): Boolean = true
+
+    override suspend fun restoreSession(): Boolean {
+        val cookies = store?.getCookies(id).orEmpty()
+        if (cookies.isEmpty()) return false
+        val body = runCatching {
+            httpClient.get(
+                "https://linux.do/session/current.json",
+                cookies,
+                mapOf("Accept" to "application/json"),
+            )
+        }.getOrNull() ?: return false
+        return ZhihuJson.parse(body)?.obj().obj("current_user") != null
+    }
 
     override suspend fun fetchCategories(): List<Community> =
         DiscourseParser.parseCategories(httpClient.get("https://linux.do/categories.json", store?.getCookies(id).orEmpty()))
@@ -435,6 +449,17 @@ class DiscourseService(
         )
     }
 
+    override suspend fun searchThreads(query: String, page: Int): SearchResult {
+        if (!restoreSession()) throw FeedflowError.AuthRequired
+        val encoded = query.formEncode()
+        val json = httpClient.get(
+            "https://linux.do/search/query?term=$encoded&page=$page",
+            store?.getCookies(id).orEmpty(),
+            mapOf("Accept" to "application/json"),
+        )
+        return DiscourseParser.parseSearch(json)
+    }
+
     override fun getWebUrl(thread: FeedThread): String = "https://linux.do/t/${thread.id}"
 }
 
@@ -448,6 +473,8 @@ class FourD4YService(
     override val requiresLogin = true
     override val supportsCommenting = true
     override val supportsThreadCreation = true
+    override val currentUsername: String?
+        get() = store?.getSetting("detected_4d4y_username")?.trim()?.takeIf { it.isNotEmpty() }
 
     override suspend fun restoreSession(): Boolean {
         val cookies = store?.getCookies(id).orEmpty()
@@ -486,9 +513,25 @@ class FourD4YService(
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
         val cookies = authCookies()
         val html = fetch(threadDetailUrl(threadId, page, cookies), cookies)
+        rememberLoggedInUsername(html)
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
         return ThreadDetailResult(parsed.first, parsed.second, parsed.third)
+    }
+
+    override suspend fun searchThreads(query: String, page: Int): SearchResult {
+        val cookies = authCookies()
+        if (cookies.isEmpty()) throw FeedflowError.AuthRequired
+        if (store?.getSetting("4d4y_sid").isNullOrBlank() && cookies.none { it.name.equals("sid", ignoreCase = true) }) {
+            fetchCategories()
+        }
+        val url = withSid(
+            "https://www.4d4y.com/forum/search.php?searchsubmit=yes" +
+                "&srchtxt=${query.gbkFormEncode()}&searchfield=all&page=$page",
+            cookies,
+        )
+        val threads = FourD4YParser.parseSearchThreads(fetch(url, cookies))
+        return SearchResult(threads, threads.size >= 20)
     }
 
     private fun authCookies(): List<com.webrules.feedflow.core.network.FeedflowCookie> =
@@ -531,12 +574,18 @@ class FourD4YService(
         val hasLogin = (lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
         val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
         val hasDiscovery = forums.any { it.name == "Discovery" }
-        return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery || forums.size > 1)
+        return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery)
     }
 
     private fun rememberAuthenticatedPageArtifacts(html: String) {
         if (!validateSessionHtml(html)) return
         FourD4YParser.extractSid(html)?.let { store?.saveSetting("4d4y_sid", it) }
+        rememberLoggedInUsername(html)
+    }
+
+    private fun rememberLoggedInUsername(html: String) {
+        val lower = html.lowercase()
+        if (!lower.contains("action=logout") && !lower.contains("action%3dlogout") && !html.contains("退出")) return
         parseLoggedInUsername(html)?.let { store?.saveSetting("detected_4d4y_username", it) }
     }
 
@@ -545,7 +594,7 @@ class FourD4YService(
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
         val formHtml = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies), cookies)
         val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "replyFormhash", formHtml.take(200))
-        httpClient.post(
+        val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId&extra=&replysubmit=yes&inajax=1", cookies),
             body = listOf(
                 "formhash=${formHash.gbkFormEncode()}",
@@ -560,7 +609,11 @@ class FourD4YService(
                 "inajax=1",
             ).joinToString("&"),
             cookies = cookies,
+            contentType = FOURD4Y_FORM_CONTENT_TYPE,
+            headers = fourD4YMutationHeaders("https://www.4d4y.com/forum/viewthread.php?tid=$topicId"),
+            forcedCharset = "GB18030",
         )
+        ensureMutationSucceeded("postComment", response)
     }
 
     override suspend fun createThread(categoryId: String, title: String, content: String) {
@@ -569,11 +622,15 @@ class FourD4YService(
         val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies), cookies)
         val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "newThreadFormhash", formHtml.take(200))
         val typeField = extractFirstTypeId(formHtml)?.let { "&typeid=${it.gbkFormEncode()}" }.orEmpty()
-        httpClient.post(
+        val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId&extra=&topicsubmit=yes&inajax=1", cookies),
             body = "formhash=${formHash.gbkFormEncode()}&posttime=${Instant.now().epochSecond}&wysiwyg=1$typeField&subject=${title.gbkFormEncode()}&message=${content.gbkFormEncode()}&topicsubmit=yes&inajax=1",
             cookies = cookies,
+            contentType = FOURD4Y_FORM_CONTENT_TYPE,
+            headers = fourD4YMutationHeaders("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId"),
+            forcedCharset = "GB18030",
         )
+        ensureMutationSucceeded("createThread", response)
     }
 
     override suspend fun deleteThread(threadId: String, categoryId: String) {
@@ -583,11 +640,49 @@ class FourD4YService(
         val pid = parseFirstPostId(threadHtml) ?: throw FeedflowError.Parsing(id, "deletePid", threadHtml.take(200))
         val editHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1", cookies), cookies)
         val formHash = extractFormHash(editHtml) ?: throw FeedflowError.Parsing(id, "deleteFormhash", editHtml.take(200))
-        httpClient.post(
+        val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1&editsubmit=yes&inajax=1", cookies),
             body = "formhash=${formHash.gbkFormEncode()}&delete=1&editsubmit=yes&inajax=1",
             cookies = cookies,
+            contentType = FOURD4Y_FORM_CONTENT_TYPE,
+            headers = fourD4YMutationHeaders("https://www.4d4y.com/forum/viewthread.php?tid=$threadId"),
+            forcedCharset = "GB18030",
         )
+        ensureMutationSucceeded("deleteThread", response)
+    }
+
+    private fun fourD4YMutationHeaders(referer: String): Map<String, String> = mapOf(
+        "Accept" to "text/xml, */*",
+        "X-Requested-With" to "XMLHttpRequest",
+        "Referer" to referer,
+        "Origin" to "https://www.4d4y.com",
+    )
+
+    private fun ensureMutationSucceeded(operation: String, response: String) {
+        if (
+            response.contains("succeed", ignoreCase = true) ||
+            response.contains("成功") ||
+            (operation == "postComment" && response.contains("发布"))
+        ) {
+            return
+        }
+        val message = Regex("""<!\[CDATA\[(.*?)(?:\]\]>|$)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .find(response)
+            ?.groupValues
+            ?.get(1)
+            ?.stripTags()
+            ?.decodeHtmlEntities()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        if (
+            response.contains("ajaxerror", ignoreCase = true) ||
+            response.contains("登录") ||
+            response.contains("login", ignoreCase = true) ||
+            response.contains("无权访问")
+        ) {
+            throw FeedflowError.AuthRequired
+        }
+        throw FeedflowError.Parsing(id, operation, message ?: response.take(200))
     }
 
     fun calculateTimeAgo(instant: Instant): String {
@@ -614,11 +709,16 @@ class FourD4YService(
         return "https://img02.4d4y.com/forum/uc_server/data/avatar/${path}_avatar_middle.jpg"
     }
 
-    fun extractFirstTypeId(html: String): String? =
-        Regex("""<option\s+value=["'](\d+)["'][^>]*>""", RegexOption.IGNORE_CASE)
-            .findAll(html)
+    fun extractFirstTypeId(html: String): String? {
+        val select = Regex(
+            """<select[^>]*name=["']typeid["'][^>]*>(.*?)</select>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(html)?.groupValues?.get(1) ?: return null
+        return Regex("""<option[^>]*value=["'](\d+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(select)
             .map { it.groupValues[1] }
             .firstOrNull { it != "0" }
+    }
 
     fun extractFormHash(html: String): String? {
         val patterns = listOf(
@@ -633,10 +733,11 @@ class FourD4YService(
     }
 
     fun parseFirstPostId(html: String): String? =
-        Regex("""authorposton(\d+)""").find(html)?.groupValues?.get(1)
+        listOf("""pid=(\d+)""", """reppost=(\d+)""", """repquote=(\d+)""", """authorposton(\d+)""", """post_(\d+)""")
+            .firstNotNullOfOrNull { Regex(it, RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1) }
 
     override fun canDeleteThread(thread: FeedThread): Boolean =
-        store?.getSetting("detected_4d4y_username")?.equals(thread.author.username, ignoreCase = true) == true
+        currentUsername?.equals(thread.author.username, ignoreCase = true) == true
 
     fun parseThreadDetailHtml(html: String, threadId: String, page: Int): Triple<FeedThread, List<Comment>, Int?>? {
         val title = extractThreadDetailTitle(html)
@@ -673,28 +774,13 @@ class FourD4YService(
             }
             return Triple(thread, comments, extractThreadDetailTotalPages(html))
         }
-        val authorMatch = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>.*?发表于\s*([^<]+)</em>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(html)
-        val communityMatch = Regex("""forumdisplay\.php\?fid=(\d+)[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(html)
-        val rawContent = extractDetailContent(html)
-        val comments = Regex("""<li[^>]*id=["']pid(\d+)["'][^>]*>(.*?)</li>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            .findAll(html)
-            .mapNotNull {
-                val block = it.groupValues[2]
-                val author = Regex("""space\.php\?uid=(\d+)[^>]*>([^<]+)</a>/\s*([^<]+?)(?:</div>|$)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                    .find(block) ?: return@mapNotNull null
-                Comment(
-                    id = it.groupValues[1],
-                    author = User(author.groupValues[1], author.groupValues[2].decodeHtmlEntities(), avatarUrlForUid(author.groupValues[1])),
-                    content = cleanContent(extractReplyContent(block)),
-                    timeAgo = author.groupValues[3].trim(),
-                    likeCount = 0,
-                )
-            }.toList()
-        val totalPages = Regex("""<strong[^>]*>\s*\d+/(\d+)\s*</strong>""", RegexOption.IGNORE_CASE)
-            .find(html)?.groupValues?.get(1)?.toIntOrNull()
+        val wapPosts = listOfNotNull(extractWapMainPost(html)) + extractWapReplyPosts(html)
+        if (wapPosts.isEmpty()) return null
+        val commentPosts = if (page == 1) wapPosts.drop(1) else wapPosts
+        val mainPost = wapPosts.first()
         val community = Community(
-            id = communityMatch?.groupValues?.get(1).orEmpty(),
-            name = communityMatch?.groupValues?.get(2)?.decodeHtmlEntities().orEmpty(),
+            id = extractThreadDetailFid(html, threadId),
+            name = "",
             description = "",
             category = "",
             activeToday = 0,
@@ -703,18 +789,23 @@ class FourD4YService(
         val thread = FeedThread(
             id = threadId,
             title = title,
-            content = if (page == 1) cleanContent(rawContent) else "",
-            author = if (page == 1) {
-                User(authorMatch?.groupValues?.get(1).orEmpty(), authorMatch?.groupValues?.get(2).orEmpty(), avatarUrlForUid(authorMatch?.groupValues?.get(1).orEmpty()))
-            } else {
-                User("0", "", "")
-            },
+            content = if (page == 1) cleanContent(mainPost.rawContent) else "",
+            author = if (page == 1) mainPost.author else User("0", "", ""),
             community = community,
-            timeAgo = if (page == 1) authorMatch?.groupValues?.get(3)?.trim().orEmpty() else "",
+            timeAgo = if (page == 1) mainPost.timeAgo else "",
             likeCount = 0,
-            commentCount = if (page == 1) comments.size else 0,
+            commentCount = if (page == 1) commentPosts.size else 0,
         )
-        return Triple(thread, comments, totalPages)
+        val comments = commentPosts.map { post ->
+            Comment(
+                id = post.id,
+                author = post.author,
+                content = cleanContent(post.rawContent),
+                timeAgo = post.timeAgo,
+                likeCount = 0,
+            )
+        }
+        return Triple(thread, comments, extractThreadDetailTotalPages(html))
     }
 
     private data class FourD4YDetailPost(
@@ -723,6 +814,123 @@ class FourD4YService(
         val rawContent: String,
         val timeAgo: String,
     )
+
+    private fun extractWapMainPost(html: String): FourD4YDetailPost? {
+        val options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        val opening = Regex(
+            """<div(?=[^>]*class=["'][^"']*detailcon)(?=[^>]*id=["']pid(\d+)["'])[^>]*>""",
+            options,
+        ).find(html)
+        if (opening != null) {
+            val contentStart = opening.range.last + 1
+            val boundary = Regex(
+                """<div[^>]*class=["'][^"']*(?:detailbtn|replylist)[^"']*["']|<li[^>]*id=["']pid\d+["']|</body>""",
+                options,
+            ).find(html, contentStart)?.range?.first ?: html.length
+            var rawContent = html.substring(contentStart, boundary).trimEnd()
+            if (rawContent.endsWith("</div>", ignoreCase = true)) {
+                rawContent = rawContent.dropLast("</div>".length)
+            }
+            val pid = opening.groupValues[1]
+            val prefix = html.substring(0, opening.range.first).takeLast(2_500)
+            return FourD4YDetailPost(
+                id = pid,
+                author = extractWapAuthor(prefix),
+                rawContent = rawContent,
+                timeAgo = extractWapMainPostTime(prefix, pid),
+            )
+        }
+        val patterns = listOf(
+            """<div[^>]*class=["'][^"']*detailcon[^"']*["'][^>]*id=["']pid(\d+)["'][^>]*>(.*?)</div>\s*</div>\s*<div[^>]*class=["'][^"']*detailbtn""",
+            """<div[^>]*id=["']pid(\d+)["'][^>]*class=["'][^"']*detailcon[^"']*["'][^>]*>(.*?)</div>\s*</div>\s*<div[^>]*class=["'][^"']*detailbtn""",
+            """<div[^>]*class=["'][^"']*detailcon[^"']*["'][^>]*id=["']pid(\d+)["'][^>]*>(.*?)</div>""",
+            """<div[^>]*id=["']pid(\d+)["'][^>]*class=["'][^"']*detailcon[^"']*["'][^>]*>(.*?)</div>""",
+        )
+        patterns.forEach { pattern ->
+            val match = Regex(pattern, options).find(html) ?: return@forEach
+            val pid = match.groupValues[1]
+            val prefix = html.substring(0, match.range.first).takeLast(2_500)
+            return FourD4YDetailPost(
+                id = pid,
+                author = extractWapAuthor(prefix),
+                rawContent = match.groupValues[2],
+                timeAgo = extractWapMainPostTime(prefix, pid),
+            )
+        }
+        return null
+    }
+
+    private fun extractWapReplyPosts(html: String): List<FourD4YDetailPost> {
+        val options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+        val replyList = Regex(
+            """<div[^>]*class=["'][^"']*replylist[^"']*["'][^>]*>\s*<ul>(.*?)</ul>\s*</div>""",
+            options,
+        ).find(html)?.groupValues?.get(1) ?: html
+        return Regex("""<li[^>]*id=["']pid(\d+)["'][^>]*>(.*?)</li>""", options)
+            .findAll(replyList)
+            .mapNotNull { match ->
+                val block = match.groupValues[2]
+                val top = Regex(
+                    """<div[^>]*class=["'][^"']*replytop[^"']*["'][^>]*>(.*?)</div>""",
+                    options,
+                ).find(block)?.groupValues?.get(1) ?: block
+                val content = Regex(
+                    """<div[^>]*class=["'][^"']*replycon[^"']*["'][^>]*>(.*)</div>\s*$""",
+                    options,
+                ).find(block)?.groupValues?.get(1) ?: return@mapNotNull null
+                FourD4YDetailPost(
+                    id = match.groupValues[1],
+                    author = extractWapAuthor(top),
+                    rawContent = content,
+                    timeAgo = extractWapReplyPostTime(top),
+                )
+            }
+            .toList()
+    }
+
+    private fun extractWapAuthor(html: String): User {
+        val match = Regex(
+            """<a[^>]+href=["']space\.php\?uid=(\d+)[^"']*["'][^>]*>([^<]+)</a>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).findAll(html).lastOrNull()
+        val uid = match?.groupValues?.get(1).orEmpty()
+        val username = match?.groupValues?.get(2)?.stripTags()?.decodeHtmlEntities()?.trim().orEmpty()
+        return User(
+            id = uid.ifBlank { "0" },
+            username = username.ifBlank { "User" },
+            avatar = if (uid.isBlank()) "person.circle" else avatarUrlForUid(uid),
+        )
+    }
+
+    private fun extractWapMainPostTime(html: String, pid: String): String =
+        listOf(
+            """<em[^>]*id=["']authorposton${Regex.escape(pid)}["'][^>]*>(.*?)</em>""",
+            """<em[^>]*>(.*?)</em>""",
+        ).firstNotNullOfOrNull { pattern ->
+            Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .find(html)
+                ?.groupValues
+                ?.get(1)
+                ?.let(::cleanDiscuzPostTime)
+                ?.takeIf { it.isNotBlank() }
+        }.orEmpty()
+
+    private fun extractWapReplyPostTime(html: String): String =
+        listOf(
+            """space\.php\?uid=\d+[^>]*>[^<]+</a>\s*/\s*([^<]+)""",
+            """(\d{4}-\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})""",
+            """(\d{1,2}:\d{2})""",
+        ).firstNotNullOfOrNull { pattern ->
+            Regex(pattern, setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .find(html)
+                ?.groupValues
+                ?.get(1)
+                ?.let(::cleanDiscuzPostTime)
+                ?.takeIf { it.isNotBlank() }
+        }.orEmpty()
+
+    private fun cleanDiscuzPostTime(html: String): String =
+        cleanContent(html).replace("发表于", "").trim()
 
     private fun extractDesktopThreadDetailPosts(html: String): List<FourD4YDetailPost> {
         val authors = extractDesktopPostAuthors(html)
@@ -789,11 +997,35 @@ class FourD4YService(
             ?.groupValues
             ?.get(1)
             .orEmpty()
+        val explicitAvatar = extractAvatarUrl(block)
         return User(
             id = uid.ifBlank { username },
             username = username,
-            avatar = if (uid.isNotBlank()) avatarUrlForUid(uid) else "person.circle",
+            avatar = explicitAvatar ?: if (uid.isNotBlank()) avatarUrlForUid(uid) else "person.circle",
         )
+    }
+
+    private fun extractAvatarUrl(html: String): String? {
+        val patterns = listOf(
+            """<img[^>]+class=["'][^"']*avatar[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']""",
+            """<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]+class=["'][^"']*avatar[^"']*["']""",
+            """<img[^>]+(?:src|data-src|file)=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
+            """<img[^>]+srcset=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
+            """background(?:-image)?\s*:\s*url\(["']?([^"')]+(?:avatar|uc_server|face|head)[^"')]+)["']?\)""",
+        )
+        val raw = patterns.firstNotNullOfOrNull { pattern ->
+            Regex(pattern, RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+        } ?: return null
+        val first = raw.substringBefore(',').trim().split(Regex("""\s+""")).first().decodeHtmlEntities()
+        return when {
+            first.isBlank() -> null
+            first.startsWith("//") -> "https:$first"
+            first.startsWith("http") -> first
+            first.startsWith("/") -> "https://www.4d4y.com$first"
+            first.startsWith("uc_server/") -> "https://www.4d4y.com/$first"
+            first.startsWith("data/avatar/") -> "https://img02.4d4y.com/forum/uc_server/$first"
+            else -> "https://www.4d4y.com/forum/$first"
+        }
     }
 
     private fun extractThreadDetailTitle(html: String): String {
@@ -820,17 +1052,26 @@ class FourD4YService(
     private fun extractThreadDetailFid(html: String, threadId: String): String {
         val decoded = html.decodeHtmlEntities()
         val escapedThreadId = Regex.escape(threadId)
-        return listOf(
+        val direct = listOf(
             """\bfid\s*=\s*parseInt\(['"](\d+)['"]\)""",
             """post\.php\?action=reply[^"']*[?&]fid=(\d+)[^"']*[?&]tid=$escapedThreadId""",
             """class=["'][^"']*current[^"']*["'][^>]*>\s*<a[^>]+href=["']forumdisplay\.php\?fid=(\d+)""",
-            """forumdisplay\.php\?fid=(\d+)""",
         ).firstNotNullOfOrNull { pattern ->
             Regex(pattern, RegexOption.IGNORE_CASE).find(decoded)?.groupValues?.get(1)
-        } ?: "0"
+        }
+        if (direct != null) return direct
+        val navbar = Regex(
+            """<div[^>]*class=["'][^"']*navbar[^"']*["'][^>]*>(.*?)</div>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+        ).find(decoded)?.groupValues?.get(1)
+        val forumPattern = Regex("""forumdisplay\.php\?fid=(\d+)""", RegexOption.IGNORE_CASE)
+        return navbar
+            ?.let { forumPattern.findAll(it).lastOrNull()?.groupValues?.get(1) }
+            ?: forumPattern.findAll(decoded).lastOrNull()?.groupValues?.get(1)
+            ?: "0"
     }
 
-    private fun extractThreadDetailTotalPages(html: String): Int? {
+    private fun extractThreadDetailTotalPages(html: String): Int {
         val candidates = mutableListOf<Int>()
         Regex("""<div[^>]*class=["']pages["'][^>]*>(.*?)</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .find(html)
@@ -845,13 +1086,18 @@ class FourD4YService(
             ?.get(1)
             ?.toIntOrNull()
             ?.let { candidates += it }
-        return candidates.maxOrNull()
+        return candidates.maxOrNull() ?: 1
     }
 
     companion object {
         fun parseLoggedInUsername(html: String): String? =
             Regex("""欢迎您回来，\s*<strong>([^<]+)</strong>""").find(html)?.groupValues?.get(1)
                 ?: Regex("""space\.php\?uid=\d+[^>]*font-weight:\s*800[^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)
+                ?: Regex("""space\.php\?username=([^"'&]{1,40})["'][^>]*>(?:个人空间|我的)""", RegexOption.IGNORE_CASE)
+                    .find(html)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.let { java.net.URLDecoder.decode(it, StandardCharsets.UTF_8.name()) }
 
         fun cleanContent(html: String): String {
             var processed = html
@@ -862,7 +1108,8 @@ class FourD4YService(
                 if (src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif")) {
                     ""
                 } else {
-                    "\n[IMAGE:$src]\n"
+                    val resolved = if (src.startsWith("http")) src else "https://www.4d4y.com/forum/$src"
+                    "\n[IMAGE:$resolved]\n"
                 }
             }
             processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).replace(processed) { match ->
@@ -880,25 +1127,6 @@ class FourD4YService(
                 .joinToString("\n")
         }
 
-        private fun extractDetailContent(html: String): String {
-            val startMatch = Regex("""<div[^>]*class=["'][^"']*detailcon[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE).find(html)
-                ?: return ""
-            val contentStart = startMatch.range.last + 1
-            val end = Regex("""<div[^>]*class=["'][^"']*detailbtn|<li\s+id=["']?pid\d+|<div[^>]*class=["'][^"']*replylist|</body>""", RegexOption.IGNORE_CASE)
-                .find(html, contentStart)
-                ?.range
-                ?.first
-                ?: html.length
-            return html.substring(contentStart, end)
-        }
-
-        private fun extractReplyContent(block: String): String {
-            val startMatch = Regex("""<div[^>]*class=["'][^"']*replycon[^"']*["'][^>]*>""", RegexOption.IGNORE_CASE).find(block)
-                ?: return ""
-            val contentStart = startMatch.range.last + 1
-            val end = block.lastIndexOf("</div>").takeIf { it > contentStart } ?: block.length
-            return block.substring(contentStart, end)
-        }
     }
 }
 
@@ -1059,26 +1287,19 @@ class ZhihuService(
         for (element in data) {
             val item = element.obj() ?: continue
             val target = item.obj("target") ?: continue
-            val cardId = item.str("card_id")
-            val questionId = if (cardId != null && cardId.startsWith("Q_")) {
-                cardId.removePrefix("Q_")
-            } else {
-                item.longId("id")?.toString() ?: continue
-            }
-            val title = target.obj("title_area").str("text") ?: "Untitled"
-            val childAuthor = item.arr("children")?.firstOrNull()?.obj()?.obj("author")
-            val excerpt = target.obj("excerpt_area").str("text")
-                ?: item.arr("children")?.firstOrNull()?.obj()?.str("excerpt")
-                ?: ""
+            val questionId = ZhihuParser.hotQuestionId(item, target) ?: continue
+            val title = ZhihuParser.hotTitle(item, target)
+            val excerpt = ZhihuParser.hotExcerpt(item, target)
+            val author = ZhihuParser.hotAuthor(item, target)
             questionDataCache[questionId] = title to excerpt
             val metrics = target.obj("metrics_area")
             threads += FeedThread(
                 id = "question_$questionId",
-                title = title.decodeHtmlEntities(),
-                content = excerpt.decodeHtmlEntities(),
-                author = ZhihuParser.author(childAuthor, fallbackName = "热榜"),
+                title = title,
+                content = excerpt,
+                author = ZhihuParser.author(author, fallbackName = "热榜"),
                 community = hotCommunity,
-                timeAgo = item.str("detail_text").orEmpty(),
+                timeAgo = item.str("detail_text") ?: metrics.str("text").orEmpty(),
                 likeCount = metrics.int("follower_count") ?: 0,
                 commentCount = metrics.int("answer_count") ?: 0,
                 tags = listOf("🔥 热榜"),
@@ -1129,7 +1350,7 @@ class ZhihuService(
 
     private suspend fun fetchQuestionDetail(questionId: String, page: Int): ThreadDetailResult {
         val url = "https://www.zhihu.com/api/v4/questions/$questionId" +
-            "?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics"
+            "?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author"
         val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
         val json = body?.let { ZhihuJson.parse(it)?.obj() }
         var title = "问题"
@@ -1137,17 +1358,16 @@ class ZhihuService(
         var commentCount = 0
         var answerCount = 0
         var author = ZhihuParser.author(null)
-        if (json != null && json.str("error") == null) {
+        if (json != null && json["error"] == null) {
             title = json.str("title") ?: title
             detail = json.str("detail") ?: json.str("excerpt") ?: ""
             commentCount = json.int("comment_count") ?: 0
             answerCount = json.int("answer_count") ?: 0
             author = ZhihuParser.author(json.obj("author"))
-        } else {
-            questionDataCache[questionId]?.let { (cachedTitle, cachedExcerpt) ->
-                title = cachedTitle
-                detail = cachedExcerpt
-            }
+        }
+        questionDataCache[questionId]?.let { (cachedTitle, cachedExcerpt) ->
+            if (title == "问题" || title.isBlank()) title = cachedTitle
+            if (detail.isBlank()) detail = cachedExcerpt
         }
         val thread = FeedThread(
             id = "question_$questionId",
@@ -1216,7 +1436,7 @@ class ZhihuService(
     private suspend fun fetchQuestionAnswers(questionId: String, page: Int): List<Comment> {
         val offset = (page - 1) * 10
         val url = "https://www.zhihu.com/api/v4/questions/$questionId/answers" +
-            "?include=content,voteup_count,comment_count&limit=10&offset=$offset&sort_by=default"
+            "?include=content,voteup_count,comment_count,author&limit=10&offset=$offset&sort_by=default"
         val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
         val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
         return data.mapNotNull { element ->

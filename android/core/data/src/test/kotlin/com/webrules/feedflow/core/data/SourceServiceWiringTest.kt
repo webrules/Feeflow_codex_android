@@ -9,9 +9,24 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SourceServiceWiringTest {
+    @Test fun authenticatedSearchesRejectMissingSessions() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        val httpClient = SourceFixtureHttpClient()
+
+        assertFailsWith<FeedflowError.AuthRequired> {
+            DiscourseService(store, httpClient).searchThreads("android", 1)
+        }
+        assertFailsWith<FeedflowError.AuthRequired> {
+            FourD4YService(store, httpClient).searchThreads("android", 1)
+        }
+        Unit
+    }
+
     @Test fun v2exServiceUsesTabsThreadParserAndReplyParser() = runBlocking {
         val store = InMemoryFeedflowStore()
         store.saveCookies("v2ex", listOf(FeedflowCookie("a2", "token", "v2ex.com", expiresAtMillis = null)))
@@ -58,6 +73,7 @@ class SourceServiceWiringTest {
         val store = InMemoryFeedflowStore()
         store.saveCookies("linux_do", listOf(FeedflowCookie("_t", "token", "linux.do", expiresAtMillis = null)))
         val httpClient = SourceFixtureHttpClient(
+            "https://linux.do/session/current.json" to """{"current_user":{"id":1,"username":"alice"}}""",
             "https://linux.do/categories.json" to """{"category_list":{"categories":[{"id":5,"name":"General","description":"Talk","slug":"general","topic_count":42}]}}""",
             "https://linux.do/c/5.json?page=1" to """{"topic_list":{"topics":[{"id":9,"title":"Linux topic","posts_count":3}]}}""",
             "https://linux.do/t/9.json?page=1" to """
@@ -65,6 +81,13 @@ class SourceServiceWiringTest {
                   {"id":91,"username":"alice","cooked":"<p>Original &amp; post</p>"},
                   {"id":92,"username":"bob","cooked":"<p>Reply<br>body</p>"}
                 ]}}
+            """.trimIndent(),
+            "https://linux.do/search/query?term=android+parity&page=1" to """
+                {
+                  "topics":[{"id":88,"title":"Android &amp; parity","created_at":"2026-07-03T12:00:00Z","posts_count":3,"like_count":7,"category_id":5,"tags":["android"]}],
+                  "posts":[{"topic_id":88,"user_id":1,"username":"alice","avatar_template":"/user_avatar/linux.do/alice/{size}/1.png","blurb":"<p>Search &amp; preview</p>"}],
+                  "grouped_search_result":{"more_results":true}
+                }
             """.trimIndent(),
         )
         val service = DiscourseService(
@@ -81,6 +104,13 @@ class SourceServiceWiringTest {
         assertEquals("Original & post", detail.thread.content)
         assertEquals("bob", detail.comments.single().author.username)
         assertTrue(detail.comments.single().content.contains("Reply"))
+        assertTrue(service.restoreSession())
+        val search = service.searchThreads("android parity", 1)
+        assertEquals("Android & parity", search.threads.single().title)
+        assertEquals("Search & preview", search.threads.single().content)
+        assertEquals("alice", search.threads.single().author.username)
+        assertEquals(listOf("android"), search.threads.single().tags)
+        assertTrue(search.hasMore)
         service.createThread("5", "New title", "New body")
         assertEquals("https://linux.do/posts.json", httpClient.lastPostUrl)
         assertEquals("title=New+title&raw=New+body&category=5", httpClient.lastPostBody)
@@ -100,7 +130,7 @@ class SourceServiceWiringTest {
             "https://www.4d4y.com/forum/forumdisplay.php?fid=7&sid=SID123" to """
                 <tbody id="normalthread_99">
                   <a href="https://www.4d4y.com/forum/viewthread.php?tid=99"><span>GB18030 topic</span></a>
-                  <a href="space.php?uid=123">alice</a>
+                  <td class="author"><cite><a href="space.php?action=viewpro&amp;uid=123">alice</a></cite><em>2026-07-03 10:00</em></td>
                   <td class="nums"><strong>4</strong></td>
                   <td class="lastpost"><cite><a href="redirect.php?tid=99">2026-07-03 11:30</a></cite><em><a href="space.php?uid=456">bob</a></em></td>
                 </tbody>
@@ -111,7 +141,7 @@ class SourceServiceWiringTest {
                 <a href="space.php?uid=123">alice</a><em>发表于 1h</em>
                 <input type="hidden" name="formhash" value="abcd1234">
                 <div id="authorposton456"></div>
-                <div class="detailcon">Original<br>post<div class="t_attach">download.bin</div><ignore_js_op>ignored attachment</ignore_js_op><img src="https://cdn.example.com/a.jpg"><img src="/images/common/back.gif"><a href="https://example.com">Example</a></div>
+                <div class="detailcon" id="pid456">Original<br>post<div class="t_attach">download.bin</div><ignore_js_op>ignored attachment</ignore_js_op><img src="https://cdn.example.com/a.jpg"><img src="/images/common/back.gif"><a href="https://example.com">Example</a></div>
                 <li id="pid456">
                   <a href="space.php?uid=456">bob</a>/ 30m</div>
                   <div class="replycon">Reply<br>content<img src="https://cdn.example.com/r.png"></div>
@@ -129,12 +159,28 @@ class SourceServiceWiringTest {
                 <input type="hidden" name="formhash" value="abcd1234">
                 <div id="authorposton456"></div>
             """,
+            "https://www.4d4y.com/forum/search.php?searchsubmit=yes&srchtxt=android+parity&searchfield=all&page=1&sid=SID123" to """
+                <table class="datatable">
+                  <tbody><tr>
+                    <th class="subject"><a href="viewthread.php?tid=501&sid=SID123"><span>Android parity result</span></a></th>
+                    <td class="author"><cite><a href="space.php?uid=504383">iamez</a></cite><em>2026-07-03 10:00</em></td>
+                  </tr></tbody>
+                  <tbody><tr>
+                    <th class="subject"><a href="viewthread.php?tid=501&sid=SID123">Android parity result duplicate</a></th>
+                    <td class="author"><cite><a href="space.php?uid=504383">iamez</a></cite><em>2026-07-03 10:00</em></td>
+                  </tr></tbody>
+                  <tbody><tr>
+                    <th class="subject"><a href="viewthread.php?tid=502&sid=SID123">Second result</a></th>
+                    <td class="author"><cite><a href="space-uid-737271.html">跳跳猪</a></cite><em>2026-07-03 11:00</em></td>
+                  </tr></tbody>
+                </table>
+            """,
             "https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&sid=SID123" to """
                 <input type="hidden" name="formhash" value="ijkl9012">
             """,
             "https://www.4d4y.com/forum/post.php?action=newthread&fid=7&sid=SID123" to """
                 <input type="hidden" name="formhash" value="efgh5678">
-                <select><option value="0">None</option><option value="12">Type</option></select>
+                <select name="typeid"><option value="0">None</option><option value="12">Type</option></select>
             """,
         )
         val service = FourD4YService(
@@ -145,9 +191,22 @@ class SourceServiceWiringTest {
         assertEquals("技术交流", categories.single().name)
         val threads = service.fetchCategoryThreads("7", categories, 1)
         assertEquals("GB18030 topic", threads.single().title)
+        assertEquals("123", threads.single().author.id)
+        assertEquals("alice", threads.single().author.username)
+        assertTrue(threads.single().author.avatar.endsWith("/000/00/01/23_avatar_middle.jpg"))
         assertEquals(4, threads.single().commentCount)
         assertEquals("2026-07-03 11:30", threads.single().lastPostTime)
         assertEquals("bob", threads.single().lastPosterName)
+        val search = service.searchThreads("android parity", 1)
+        assertEquals(listOf("501", "502"), search.threads.map { it.id })
+        assertEquals("Android parity result", search.threads.first().title)
+        assertEquals("504383", search.threads.first().author.id)
+        assertEquals("iamez", search.threads.first().author.username)
+        assertTrue(search.threads.first().author.avatar.endsWith("/000/50/43/83_avatar_middle.jpg"))
+        assertEquals("737271", search.threads.last().author.id)
+        assertEquals("跳跳猪", search.threads.last().author.username)
+        assertTrue(search.threads.last().author.avatar.endsWith("/000/73/72/71_avatar_middle.jpg"))
+        assertTrue(!search.hasMore)
         val detail = service.fetchThreadDetail("99", 1)
         assertEquals("4D4Y detail", detail.thread.title)
         assertTrue(detail.thread.content.contains("Original"))
@@ -170,6 +229,9 @@ class SourceServiceWiringTest {
         assertTrue(httpClient.lastPostBody.contains("wysiwyg=1"))
         assertTrue(httpClient.lastPostBody.contains("noticeauthor=&noticetrimstr=&noticeauthormsg="))
         assertTrue(httpClient.lastPostBody.contains("subject=&message=Reply+body&replysubmit=yes&inajax=1"))
+        assertEquals("XMLHttpRequest", httpClient.lastPostHeaders["X-Requested-With"])
+        assertEquals("https://www.4d4y.com", httpClient.lastPostHeaders["Origin"])
+        assertEquals("GB18030", httpClient.lastForcedCharset)
         service.createThread("7", "Title body", "Thread body")
         assertEquals("https://www.4d4y.com/forum/post.php?action=newthread&fid=7&extra=&topicsubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
         assertTrue(httpClient.lastPostBody.contains("formhash=efgh5678"))
@@ -179,6 +241,23 @@ class SourceServiceWiringTest {
         assertEquals("https://www.4d4y.com/forum/post.php?action=edit&fid=7&tid=99&pid=456&page=1&editsubmit=yes&inajax=1&sid=SID123", httpClient.lastPostUrl)
         assertEquals("formhash=ijkl9012&delete=1&editsubmit=yes&inajax=1", httpClient.lastPostBody)
         assertEquals("auth=token; sid=SID123", httpClient.lastCookieHeader)
+    }
+
+    @Test fun fourD4YMutationTreatsDiscuzAjaxErrorsAsAuthenticationFailures() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
+        val client = SourceFixtureHttpClient(
+            "https://www.4d4y.com/forum/viewthread.php?tid=99" to
+                """<input type="hidden" name="formhash" value="abcd1234">""",
+        ).apply {
+            postResponse = "<root><![CDATA[ajaxerror: 请先登录]]></root>"
+        }
+        val service = FourD4YService(store, client)
+
+        assertFailsWith<FeedflowError.AuthRequired> {
+            service.postComment("99", "7", "Reply")
+        }
+        Unit
     }
 
     @Test fun fourD4YLoginSessionShowsProtectedCategoriesAndPersistsSid() = runBlocking {
@@ -214,6 +293,39 @@ class SourceServiceWiringTest {
         assertEquals("abc123xyz", store.getSetting("4d4y_sid"))
         val threads = service.fetchCategoryThreads("2", categories, 1)
         assertEquals("Protected topic", threads.single().title)
+    }
+
+    @Test fun fourD4YRestoreRejectsGuestPageEvenWhenSeveralForumsAreVisible() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "stale", "4d4y.com", expiresAtMillis = null)))
+        val service = FourD4YService(
+            store,
+            SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/index.php" to """
+                    <a href="forumdisplay.php?fid=7">Public one</a>
+                    <a href="forumdisplay.php?fid=8">Public two</a>
+                    <a href="logging.php?action=login">登录</a>
+                """,
+            ),
+        )
+
+        assertFalse(service.restoreSession())
+    }
+
+    @Test fun fourD4YRejectsUnparseableDetailAndDefaultsParsedDetailsToOnePage() {
+        val service = FourD4YService()
+        assertNull(service.parseThreadDetailHtml("<html><title>Login</title></html>", "1", 1))
+        val parsed = service.parseThreadDetailHtml(
+            """
+                <title>One page topic - 4D4Y</title>
+                <a href="forumdisplay.php?fid=2">Discovery</a>
+                <a href="space.php?uid=10">alice</a><em id="authorposton11">发表于 now</em>
+                <div class="detailcon" id="pid11">Body</div>
+            """,
+            "1",
+            1,
+        )
+        assertEquals(1, parsed?.third)
     }
 
     @Test fun fourD4YAuthenticatedCategoriesIncludeMemberOnlyCategoryAndFallbackThreads() = runBlocking {
@@ -368,6 +480,7 @@ class SourceServiceWiringTest {
                   <table>
                     <tr>
                       <td class="postauthor">
+                        <img class="avatar" src="data/avatar/000/00/01/11_avatar_middle.jpg">
                         <div class="postinfo"><a href="space.php?uid=111">alice</a></div>
                       </td>
                       <td class="t_msgfont" id="postmessage_501">
@@ -400,6 +513,10 @@ class SourceServiceWiringTest {
         assertEquals("35", detail.thread.community.id)
         assertEquals("111", detail.thread.author.id)
         assertEquals("alice", detail.thread.author.username)
+        assertEquals(
+            "https://img02.4d4y.com/forum/uc_server/data/avatar/000/00/01/11_avatar_middle.jpg",
+            detail.thread.author.avatar,
+        )
         assertTrue(detail.thread.content.contains("Original desktop"))
         assertTrue(detail.thread.content.contains("[IMAGE:https://cdn.example.com/original.jpg]"))
         assertEquals(1, detail.thread.commentCount)
@@ -420,19 +537,27 @@ class SourceServiceWiringTest {
         val service = ZhihuService(
             SourceFixtureHttpClient(
                 "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
-                    """{"data":[{"card_id":"Q_123","detail_text":"100万热度","target":{"title_area":{"text":"Hot question"},"excerpt_area":{"text":"Hot excerpt"},"metrics_area":{"follower_count":10,"answer_count":5}},"children":[{"author":{"name":"作者"}}]}]}""",
+                    """{"data":[{"id":"0_987","detail_text":"765万热度","target":{"id":123,"type":"question","url":"https://api.zhihu.com/questions/123","title":"Hot question","excerpt":"<b>Hot excerpt</b>","author":{"id":"author-1","name":"提问者","avatar_url":"https://pic.zhimg.com/author.jpg"},"metrics_area":{"follower_count":10,"answer_count":5}}}]}""",
                 "https://www.zhihu.com/api/v4/search_v3?q=android+parity&t=content&correction=1&offset=0&limit=20" to
                     """{"data":[{"object":{"type":"article","id":789,"title":"Search article","excerpt":"body","author":{"name":"A"}}}],"paging":{"is_end":true}}""",
                 "https://www.zhihu.com/api/v4/answers/456?include=content,html_content,excerpt,thanks_count,voteup_count,comment_count,visited_count,author" to
                     """{"content":"Answer body","voteup_count":3,"comment_count":1,"question":{"title":"Android parity"},"author":{"name":"Writer"}}""",
                 "https://www.zhihu.com/api/v4/answers/456/root_comments?limit=20&offset=0&order=normal&status=open" to
                     """{"data":[{"id":"c1","content":"Nice","created_time":0,"like_count":2,"author":{"member":{"name":"Reader"}}}]}""",
+                "https://www.zhihu.com/api/v4/questions/123?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author" to
+                    """{"id":123,"title":"Hot question detail","detail":"<p>Question body</p>","answer_count":1,"comment_count":2,"author":{"id":"author-1","name":"提问者","avatar_url_template":"//pic.zhimg.com/author_{size}.jpg"}}""",
+                "https://www.zhihu.com/api/v4/questions/123/answers?include=content,voteup_count,comment_count,author&limit=10&offset=0&sort_by=default" to
+                    """{"data":[{"id":999,"content":"<p>Top answer</p>","voteup_count":8,"author":{"id":"answerer","name":"回答者","avatar_url":"https://pic.zhimg.com/answerer.jpg"}}]}""",
             ),
         )
         val categories = service.fetchCategories()
         val hot = service.fetchCategoryThreads("hot", categories, 1)
         assertEquals("question_123", hot.single().id)
         assertEquals("Hot question", hot.single().title)
+        assertEquals("Hot excerpt", hot.single().content)
+        assertEquals("提问者", hot.single().author.username)
+        assertEquals("https://pic.zhimg.com/author.jpg", hot.single().author.avatar)
+        assertEquals("765万热度", hot.single().timeAgo)
 
         val search = service.searchThreads("android parity", 1)
         assertEquals("article_789", search.threads.single().id)
@@ -444,9 +569,41 @@ class SourceServiceWiringTest {
         assertEquals("Answer body", detail.thread.content)
         assertEquals("Nice", detail.comments.single().content)
         assertEquals("Reader", detail.comments.single().author.username)
+
+        val question = service.fetchThreadDetail("question_123", 1)
+        assertEquals("Hot question detail", question.thread.title)
+        assertEquals("Question body", question.thread.content)
+        assertEquals("提问者", question.thread.author.username)
+        assertEquals("https://pic.zhimg.com/author_80.jpg", question.thread.author.avatar)
+        assertEquals("Top answer", question.comments.single().content)
+        assertEquals("回答者", question.comments.single().author.username)
+        assertEquals("https://pic.zhimg.com/answerer.jpg", question.comments.single().author.avatar)
         assertFailsWith<FeedflowError.Parsing> { service.fetchThreadDetail("invalid", 1) }
         assertFailsWith<FeedflowError.Parsing> { service.fetchThreadDetail("video_456", 1) }
         Unit
+    }
+
+    @Test fun zhihuRepositoryKeepsHotMetadataForQuestionDetailFallback() = runBlocking {
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
+                """{"data":[{"card_id":"Q_321","target":{"title":"Cached hot title","excerpt":"Cached hot body"}}]}""",
+            "https://www.zhihu.com/api/v4/questions/321?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author" to
+                """{"error":{"code":101,"message":"身份未经过验证"}}""",
+            "https://www.zhihu.com/api/v4/questions/321/answers?include=content,voteup_count,comment_count,author&limit=10&offset=0&sort_by=default" to
+                """{"data":[]}""",
+        )
+        val repository = FeedflowRepository(
+            store = InMemoryFeedflowStore(),
+            httpClient = httpClient,
+        )
+        val community = Community("hot", "知乎热榜", "", "zhihu", 0, 0)
+
+        val hot = repository.loadThreads(ForumSite.Zhihu, community).fresh!!.single()
+        val detail = repository.loadThreadDetail(ForumSite.Zhihu, hot).fresh!!.first
+
+        assertEquals("question_321", hot.id)
+        assertEquals("Cached hot title", detail.title)
+        assertEquals("Cached hot body", detail.content)
     }
 
     @Test fun zhihuServiceMarksRecommendationsReadAndSendsNotInterestedPayload() = runBlocking {
@@ -496,6 +653,9 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
     var lastPostBody: String = ""
     var lastCookieHeader: String = ""
     var lastContentType: String = ""
+    var lastPostHeaders: Map<String, String> = emptyMap()
+    var lastForcedCharset: String? = null
+    var postResponse: String = "<root><![CDATA[succeed]]></root>"
 
     override suspend fun get(url: String, cookies: List<FeedflowCookie>): String {
         lastGetUrl = url
@@ -510,7 +670,20 @@ private class SourceFixtureHttpClient(private vararg val fixtures: Pair<String, 
         lastPostBody = body
         lastCookieHeader = cookies.joinToString("; ") { "${it.name}=${it.value}" }
         lastContentType = contentType
-        return "ok"
+        return postResponse
+    }
+
+    override suspend fun post(
+        url: String,
+        body: String,
+        cookies: List<FeedflowCookie>,
+        contentType: String,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String {
+        lastPostHeaders = headers
+        lastForcedCharset = forcedCharset
+        return post(url, body, cookies, contentType)
     }
 }
 

@@ -16,6 +16,15 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    buildTypes {
+        getByName("debug") {
+            providers.gradleProperty("feedflow.debugApplicationIdSuffix")
+                .orNull
+                ?.takeIf { it.isNotBlank() }
+                ?.let { applicationIdSuffix = it }
+        }
+    }
+
     buildFeatures {
         compose = true
     }

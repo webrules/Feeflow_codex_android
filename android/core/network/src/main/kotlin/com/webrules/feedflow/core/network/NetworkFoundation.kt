@@ -34,6 +34,14 @@ interface FeedflowHttpClient {
         cookies: List<FeedflowCookie> = emptyList(),
         contentType: String = "application/x-www-form-urlencoded; charset=UTF-8",
     ): String
+    suspend fun post(
+        url: String,
+        body: String,
+        cookies: List<FeedflowCookie>,
+        contentType: String,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String = post(url, body, cookies, contentType)
 }
 
 class UnimplementedFeedflowHttpClient : FeedflowHttpClient {
@@ -52,6 +60,15 @@ class UnimplementedFeedflowHttpClient : FeedflowHttpClient {
 
     override suspend fun post(url: String, body: String, cookies: List<FeedflowCookie>, contentType: String): String =
         error("Network client is not wired yet for $url")
+
+    override suspend fun post(
+        url: String,
+        body: String,
+        cookies: List<FeedflowCookie>,
+        contentType: String,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String = error("Network client is not wired yet for $url")
 }
 
 class UrlConnectionFeedflowHttpClient(
@@ -74,6 +91,23 @@ class UrlConnectionFeedflowHttpClient(
 
     override suspend fun post(url: String, body: String, cookies: List<FeedflowCookie>, contentType: String): String =
         request(url = url, method = "POST", body = body, cookies = cookies, contentType = contentType)
+
+    override suspend fun post(
+        url: String,
+        body: String,
+        cookies: List<FeedflowCookie>,
+        contentType: String,
+        headers: Map<String, String>,
+        forcedCharset: String?,
+    ): String = request(
+        url = url,
+        method = "POST",
+        body = body,
+        cookies = cookies,
+        contentType = contentType,
+        headers = headers,
+        forcedCharset = forcedCharset,
+    )
 
     private fun request(
         url: String,
@@ -150,7 +184,20 @@ object CookieMatcher {
             val unexpired = cookie.expiresAtMillis == null || cookie.expiresAtMillis >= nowMillis
             domainMatches && pathMatches && unexpired
         }
-        return matching.takeIf { it.isNotEmpty() }?.joinToString("; ") { "${it.name}=${it.value}" }
+        val preferred = matching
+            .groupBy { it.name }
+            .mapNotNull { (_, candidates) ->
+                candidates.maxWithOrNull(
+                    compareBy<FeedflowCookie> { it.path.length }
+                        .thenBy { it.domain.trimStart('.').length },
+                )
+            }
+            .sortedWith(
+                compareByDescending<FeedflowCookie> { it.path.length }
+                    .thenByDescending { it.domain.trimStart('.').length }
+                    .thenBy { it.name },
+            )
+        return preferred.takeIf { it.isNotEmpty() }?.joinToString("; ") { "${it.name}=${it.value}" }
     }
 
     fun withThirtyDayExpiry(cookie: FeedflowCookie, nowMillis: Long = System.currentTimeMillis()): FeedflowCookie =

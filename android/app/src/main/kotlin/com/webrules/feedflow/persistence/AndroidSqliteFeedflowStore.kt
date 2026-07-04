@@ -8,6 +8,7 @@ import com.webrules.feedflow.core.database.FeedflowCacheKeys
 import com.webrules.feedflow.core.database.FeedflowDatabaseContract
 import com.webrules.feedflow.core.database.FeedflowPersistenceCodecs
 import com.webrules.feedflow.core.database.FeedflowStore
+import com.webrules.feedflow.core.database.DatabaseSchemaMigration
 import com.webrules.feedflow.core.database.RssFeedSubscription
 import com.webrules.feedflow.core.model.Comment
 import com.webrules.feedflow.core.model.Community
@@ -316,14 +317,15 @@ private class FeedflowSqliteOpenHelper(context: Context) : SQLiteOpenHelper(
     context,
     FeedflowDatabaseContract.databaseName,
     null,
-    1,
+    FeedflowDatabaseContract.databaseVersion,
 ) {
     override fun onCreate(db: SQLiteDatabase) {
         FeedflowDatabaseContract.schemaStatements.forEach(db::execSQL)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        onCreate(db)
+        DatabaseSchemaMigration.statementsForUpgrade(oldVersion, newVersion).forEach(db::execSQL)
+        FeedflowDatabaseContract.schemaStatements.forEach(db::execSQL)
     }
 }
 

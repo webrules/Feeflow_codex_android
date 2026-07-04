@@ -191,12 +191,37 @@ class InMemoryFeedflowStore(
 private data class CookieIdentity(val name: String, val domain: String, val path: String)
 
 object DatabaseSchemaMigration {
+    const val filteredPostsCompositeKeyVersion = 2
+
     fun needsCompositePrimaryKeyMigration(currentPrimaryKey: List<String>, expectedPrimaryKey: List<String>): Boolean =
         currentPrimaryKey != expectedPrimaryKey
+
+    fun statementsForUpgrade(oldVersion: Int, newVersion: Int): List<String> =
+        if (oldVersion < filteredPostsCompositeKeyVersion && newVersion >= filteredPostsCompositeKeyVersion) {
+            listOf(
+                """
+                CREATE TABLE filtered_posts_v2(
+                    postId TEXT NOT NULL,
+                    serviceId TEXT NOT NULL,
+                    filteredAt INTEGER,
+                    PRIMARY KEY (postId, serviceId)
+                );
+                """.trimIndent(),
+                """
+                INSERT OR REPLACE INTO filtered_posts_v2(postId, serviceId, filteredAt)
+                SELECT postId, COALESCE(serviceId, ''), filteredAt FROM filtered_posts;
+                """.trimIndent(),
+                "DROP TABLE filtered_posts;",
+                "ALTER TABLE filtered_posts_v2 RENAME TO filtered_posts;",
+            )
+        } else {
+            emptyList()
+        }
 }
 
 object FeedflowDatabaseContract {
     const val databaseName = "Feedflow.sqlite"
+    const val databaseVersion = DatabaseSchemaMigration.filteredPostsCompositeKeyVersion
     const val settingsTable = "settings"
     const val cookieSettingPrefix = "login_"
     const val cookieSettingSuffix = "_cookies"
@@ -223,9 +248,10 @@ object FeedflowDatabaseContract {
         """.trimIndent(),
         """
         CREATE TABLE IF NOT EXISTS filtered_posts(
-            postId TEXT PRIMARY KEY,
-            serviceId TEXT,
-            filteredAt INTEGER
+            postId TEXT NOT NULL,
+            serviceId TEXT NOT NULL,
+            filteredAt INTEGER,
+            PRIMARY KEY (postId, serviceId)
         );
         """.trimIndent(),
         """

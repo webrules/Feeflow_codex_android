@@ -62,7 +62,7 @@ struct ThreadListView: View {
                                             }
                                     }
                                     .buttonStyle(PlainButtonStyle())
-                                    .if(service is ZhihuService) { view in
+                                    .if(ThreadListActionPolicy.supportsNotInterested(serviceId: service.id, communityId: community.id)) { view in
                                         view.contextMenu {
                                             Button(role: .destructive) {
                                                 Task {
@@ -215,6 +215,18 @@ struct ThreadListView: View {
                     dismiss()
                 }
             }
+    }
+}
+
+enum ThreadListActionPolicy {
+    static func supportsNotInterested(serviceId: String, communityId: String) -> Bool {
+        serviceId == "zhihu" && communityId == "recommend"
+    }
+
+    static func hidesAvatar(serviceId: String, communityId: String) -> Bool {
+        serviceId == "rss" ||
+            serviceId == "hackernews" ||
+            (serviceId == "zhihu" && communityId == "hot")
     }
 }
 
@@ -384,7 +396,7 @@ struct ThreadRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
-            if !isRSS && service.id != "hackernews" {
+            if !ThreadListActionPolicy.hidesAvatar(serviceId: service.id, communityId: thread.community.id) {
                 AvatarView(urlOrName: thread.author.avatar, size: 40, fallbackText: thread.author.username)
             }
             VStack(alignment: .leading, spacing: 9) {

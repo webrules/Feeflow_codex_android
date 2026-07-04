@@ -36,7 +36,7 @@ class AuthSessionCoordinator(
         if (rejectedSignatures[site] == signature) {
             return LoginCaptureResult.Rejected(LoginCaptureFailure.RepeatedRejectedCookies)
         }
-        if (!config.hasAuthenticatedSession(siteCookies)) {
+        if (!config.hasAuthenticatedSession(siteCookies, nowMillis())) {
             rejectedSignatures[site] = signature
             return LoginCaptureResult.Rejected(LoginCaptureFailure.MissingAuthCookie)
         }
@@ -56,7 +56,7 @@ class AuthSessionCoordinator(
 
     fun restoreSession(site: ForumSite): Boolean {
         val config = SiteLoginConfig.forSite(site) ?: return false
-        return config.hasAuthenticatedSession(store.getCookies(site.serviceId).orEmpty())
+        return config.hasAuthenticatedSession(store.getCookies(site.serviceId).orEmpty(), nowMillis())
     }
 
     fun logout(site: ForumSite) {

@@ -2,22 +2,100 @@ package com.webrules.feedflow.core.data
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class IosParityInventoryTest {
     @Test
-    fun everyCurrentIosXCTestIsTrackedForAndroidParity() {
+    fun everyCurrentIosXCTestHasAValidatedAndroidParityRule() {
         val names = classQualifiedIosXCTests()
+        val rules = parityRules()
+        val rulesByClass = rules.associateBy { it.iosClass }
+
         assertEquals(262, names.size)
         assertEquals(names.size, names.distinct().size)
         assertTrue(names.all { "." in it })
         assertTrue(names.containsAll(requiredParityAnchors))
+        assertEquals(rules.size, rulesByClass.size, "Each iOS XCTest class must have exactly one parity rule")
+        assertEquals(
+            names.map { it.substringBefore(".") }.toSet(),
+            rulesByClass.keys,
+            "Parity rules must cover exactly the current iOS XCTest classes",
+        )
+
+        names.forEach { iosTest ->
+            assertNotNull(rulesByClass[iosTest.substringBefore(".")], "Missing parity rule for $iosTest")
+        }
+        rules.forEach(::validateRule)
     }
 
     private fun classQualifiedIosXCTests(): List<String> =
         checkNotNull(javaClass.classLoader?.getResourceAsStream("ios-xctest-manifest.txt")) {
             "Missing ios-xctest-manifest.txt"
         }.bufferedReader().readLines().filter { it.isNotBlank() }
+
+    private fun parityRules(): List<ParityRule> {
+        val lines = checkNotNull(javaClass.classLoader?.getResourceAsStream("ios-parity-rules-v1.tsv")) {
+            "Missing ios-parity-rules-v1.tsv"
+        }.bufferedReader().readLines()
+        assertEquals("# version=1", lines.firstOrNull(), "Unsupported or missing parity-map version")
+        return lines
+            .filterNot { it.isBlank() || it.startsWith("#") }
+            .map { line ->
+                val columns = line.split('\t')
+                assertEquals(5, columns.size, "Invalid parity rule: $line")
+                ParityRule(
+                    iosClass = columns[0],
+                    featureArea = columns[1],
+                    status = columns[2],
+                    androidTest = columns[3],
+                    testType = columns[4],
+                )
+            }
+    }
+
+    private fun validateRule(rule: ParityRule) {
+        assertTrue(rule.featureArea.isNotBlank(), "Feature area is required for ${rule.iosClass}")
+        assertTrue(rule.status in validStatuses, "Invalid status for ${rule.iosClass}: ${rule.status}")
+        assertTrue(rule.testType in validTestTypes, "Invalid test type for ${rule.iosClass}: ${rule.testType}")
+        val targetParts = rule.androidTest.split('#')
+        assertEquals(2, targetParts.size, "Android target must be Class#method for ${rule.iosClass}")
+        assertTrue(targetParts.all { it.isNotBlank() }, "Android target is incomplete for ${rule.iosClass}")
+
+        if (rule.testType == "jvm") {
+            val testClass = Class.forName(targetParts[0])
+            val testMethod = testClass.declaredMethods.firstOrNull { it.name == targetParts[1] }
+            assertNotNull(testMethod, "Missing Android test target ${rule.androidTest}")
+            assertTrue(
+                testMethod.annotations.any { it.annotationClass.qualifiedName == "org.junit.Test" },
+                "Android target is not an executable JUnit test: ${rule.androidTest}",
+            )
+        } else {
+            assertEquals(
+                "android-specific-replacement",
+                rule.status,
+                "Instrumentation mappings must be explicit Android replacements",
+            )
+        }
+    }
+
+    private data class ParityRule(
+        val iosClass: String,
+        val featureArea: String,
+        val status: String,
+        val androidTest: String,
+        val testType: String,
+    )
+
+    private val validStatuses = setOf(
+        "mapped",
+        "covered-by-contract",
+        "android-specific-replacement",
+        "live-opt-in",
+        "obsolete-approved",
+    )
+
+    private val validTestTypes = setOf("jvm", "instrumentation", "live")
 
     private fun iosXCTestNames(): List<String> = """
 testAllCasesCount

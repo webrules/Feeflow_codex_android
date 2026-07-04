@@ -1,0 +1,2 @@
+# macOS default. Replace this path when the Android SDK is installed elsewhere.
+sdk.dir=/Users/your-name/Library/Android/sdk

@@ -112,7 +112,14 @@ class FeedflowStorePersistenceTest {
         ).forEach { table -> assertTrue(schema.contains("CREATE TABLE IF NOT EXISTS $table")) }
         assertTrue(schema.contains("PRIMARY KEY (id, serviceId)"))
         assertTrue(schema.contains("PRIMARY KEY (thread_id, service_id)"))
+        assertTrue(schema.contains("PRIMARY KEY (postId, serviceId)"))
+        assertEquals(2, FeedflowDatabaseContract.databaseVersion)
         assertFalse(DatabaseSchemaMigration.needsCompositePrimaryKeyMigration(listOf("thread_id", "service_id"), listOf("thread_id", "service_id")))
+        val migration = DatabaseSchemaMigration.statementsForUpgrade(1, 2).joinToString("\n")
+        assertTrue(migration.contains("CREATE TABLE filtered_posts_v2"))
+        assertTrue(migration.contains("COALESCE(serviceId, '')"))
+        assertTrue(migration.contains("ALTER TABLE filtered_posts_v2 RENAME TO filtered_posts"))
+        assertTrue(DatabaseSchemaMigration.statementsForUpgrade(2, 2).isEmpty())
         assertNotNull(FeedflowDatabaseContract.cookieSettingKey("linux_do"))
     }
 }
