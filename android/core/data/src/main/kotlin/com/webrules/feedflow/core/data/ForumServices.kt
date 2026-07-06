@@ -516,7 +516,7 @@ class FourD4YService(
         val cookies = authCookies()
         val html = fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies)
         rememberAuthenticatedPageArtifacts(html)
-        return FourD4YParser.parseCategories(html)
+        return FourD4YParser.parseCategories(html).withProtectedDiscoveryIfAvailable(cookies)
     }
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
@@ -598,6 +598,22 @@ class FourD4YService(
         val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
         val hasDiscovery = forums.any { it.name == "Discovery" }
         return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery)
+    }
+
+    private suspend fun List<Community>.withProtectedDiscoveryIfAvailable(
+        cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
+    ): List<Community> {
+        if (any { it.id == "2" || it.name.equals("Discovery", ignoreCase = true) }) return this
+        if (!SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies)) return this
+        val html = runCatching {
+            fetch(withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=2", cookies), cookies)
+        }.getOrNull() ?: return this
+        val lower = html.lowercase()
+        val hasLogin = lower.contains("action=login") || lower.contains("logging.php?action=login") || html.contains("未登录")
+        val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
+        if (hasLogin || isChallenge) return this
+        rememberAuthenticatedPageArtifacts(html)
+        return this + Community("2", "Discovery", "", "4D4Y", 0, 0)
     }
 
     private fun rememberAuthenticatedPageArtifacts(html: String) {

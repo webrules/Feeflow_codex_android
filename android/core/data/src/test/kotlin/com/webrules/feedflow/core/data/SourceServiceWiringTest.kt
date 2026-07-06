@@ -382,6 +382,57 @@ class SourceServiceWiringTest {
         assertEquals("lastPoster", threads.single().lastPosterName)
     }
 
+    @Test fun fourD4YFetchCategoriesProbesDiscoveryWhenAuthenticatedIndexOmitsIt() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "token", "4d4y.com", expiresAtMillis = null)))
+        store.saveSetting("4d4y_sid", "SID123")
+        val service = FourD4YService(
+            store = store,
+            httpClient = SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/index.php?sid=SID123" to """
+                    <html><body>
+                        <a href="forumdisplay.php?fid=7&amp;sid=SID123">Public</a>
+                        <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                    </body></html>
+                """,
+                "https://www.4d4y.com/forum/forumdisplay.php?fid=2&sid=SID123" to """
+                    <html><body>
+                        <title>Discovery - 4D4Y</title>
+                        <tbody id="normalthread_88"><a href="viewthread.php?tid=88">Protected topic</a></tbody>
+                    </body></html>
+                """,
+            ),
+        )
+
+        val categories = service.fetchCategories()
+
+        assertEquals(listOf("Public", "Discovery"), categories.map { it.name })
+    }
+
+    @Test fun fourD4YFetchCategoriesDoesNotAddDiscoveryWhenProbeShowsLoginPage() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "stale", "4d4y.com", expiresAtMillis = null)))
+        store.saveSetting("4d4y_sid", "SID123")
+        val service = FourD4YService(
+            store = store,
+            httpClient = SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/index.php?sid=SID123" to """
+                    <html><body>
+                        <a href="forumdisplay.php?fid=7&amp;sid=SID123">Public</a>
+                        <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                    </body></html>
+                """,
+                "https://www.4d4y.com/forum/forumdisplay.php?fid=2&sid=SID123" to """
+                    <html><body><a href="logging.php?action=login">登录</a> 未登录</body></html>
+                """,
+            ),
+        )
+
+        val categories = service.fetchCategories()
+
+        assertEquals(listOf("Public"), categories.map { it.name })
+    }
+
     @Test fun fourD4YRestoreSessionStoresLoggedInUsernameForDeleteGating() = runBlocking {
         val store = InMemoryFeedflowStore()
         store.saveCookies("4d4y", listOf(FeedflowCookie("auth", "token", "4d4y.com", expiresAtMillis = null)))
