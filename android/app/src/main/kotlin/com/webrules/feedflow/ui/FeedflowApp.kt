@@ -2080,7 +2080,10 @@ private fun WebLoginSheetScreen(
                     authCoordinator.rememberFourD4YSid(capturedFourD4YSid)
                 }
                 scope.launch {
-                    if (validateSession()) {
+                    val verified = validateSession()
+                    val acceptedFourD4YCapture = site == ForumSite.FourD4Y &&
+                        result.cookies.any { it.domain.contains("4d4y.com", ignoreCase = true) }
+                    if (verified || acceptedFourD4YCapture) {
                         accepted = true
                         onAccepted()
                     } else {
