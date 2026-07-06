@@ -247,6 +247,26 @@ class ParsingAndAccessibilityParityTest {
         assertFalse(cleaned.contains("script"))
     }
 
+    @Test fun rssContentCleanerPreservesArticleFormatting() {
+        val cleaned = RssContentCleaner.clean(
+            """
+                <article>
+                  <h2>Section Title</h2>
+                  <p>First paragraph with <a href="https://example.com/ref">reference</a>.</p>
+                  <p>Second paragraph stays separate.</p>
+                  <ul><li>First bullet</li><li>Second bullet</li></ul>
+                  <blockquote><p>Quoted text.</p></blockquote>
+                </article>
+            """.trimIndent(),
+        )
+
+        assertTrue(cleaned.contains("## Section Title"))
+        assertTrue(cleaned.contains("First paragraph with [LINK:https://example.com/ref|reference].\n\nSecond paragraph stays separate."))
+        assertTrue(cleaned.contains("• First bullet\n• Second bullet"))
+        assertTrue(cleaned.contains("[QUOTE]Quoted text.[/QUOTE]"))
+    }
+
+
     @Test fun rssParserFallsBackWhenAndroidDomReturnsNoItems() {
         val rss = """
             <?xml version="1.0"?>
@@ -322,8 +342,10 @@ class ReadOnlySourceParityTest {
                     <html><body>
                       <nav>Menu chrome</nav>
                       <article>
+                        <h2>Article Section</h2>
                         <p>This is the full article body with enough extra words to prove RSS detail pages no longer stop at feed summaries.</p>
                         <p>It includes a second paragraph and a <a href="/more">relative link</a> that should survive cleaning.</p>
+                        <ul><li>Formatted item one</li><li>Formatted item two</li></ul>
                       </article>
                     </body></html>
                 """.trimIndent(),
@@ -338,7 +360,10 @@ class ReadOnlySourceParityTest {
         assertEquals("https://example.com/rss", service.getWebUrl(threads.single()))
         val detail = service.fetchThreadDetail("https://example.com/rss", page = 1)
         assertEquals("RSS Item", detail.thread.title)
+        assertTrue(detail.thread.content.contains("## Article Section"))
         assertTrue(detail.thread.content.contains("full article body"))
+        assertTrue(detail.thread.content.contains("summaries.\n\nIt includes a second paragraph"))
+        assertTrue(detail.thread.content.contains("• Formatted item one\n• Formatted item two"))
         assertTrue(detail.thread.content.contains("[LINK:https://example.com/more|relative link]"))
         assertFalse(detail.thread.content.contains("Summary only."))
         assertFalse(detail.thread.content.contains("Menu chrome"))

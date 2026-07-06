@@ -3498,6 +3498,12 @@ private fun ParsedContent(
         FeedflowContentRenderer.parseBlocks(content).forEach { block ->
             when (block) {
                 is ContentBlock.Text -> LinkedText(block.segments, onLinkClick, useAccentLinkColor)
+                is ContentBlock.Heading -> LinkedText(
+                    block.segments,
+                    onLinkClick,
+                    useAccentLinkColor,
+                    headingLevel = block.level,
+                )
                 is ContentBlock.Quote -> Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3529,9 +3535,18 @@ private fun LinkedText(
     segments: List<LinkSegment>,
     onLinkClick: ((String, String) -> Unit)? = null,
     useAccentLinkColor: Boolean = true,
+    headingLevel: Int? = null,
 ) {
     val linkColor = if (useAccentLinkColor) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     val single = segments.singleOrNull() as? LinkSegment.Link
+    val textStyle = when (headingLevel) {
+        1 -> MaterialTheme.typography.headlineSmall
+        2 -> MaterialTheme.typography.titleLarge
+        3 -> MaterialTheme.typography.titleMedium
+        4, 5, 6 -> MaterialTheme.typography.titleSmall
+        else -> MaterialTheme.typography.bodyMedium
+    }
+    val headingWeight = if (headingLevel != null) FontWeight.Bold else FontWeight.Normal
     if (single != null) {
         ForumCard(
             modifier = if (onLinkClick != null) {
@@ -3557,8 +3572,9 @@ private fun LinkedText(
             } else {
                 Modifier
             },
-            style = MaterialTheme.typography.bodyMedium,
             color = if (firstLink != null) linkColor else MaterialTheme.colorScheme.onSurface,
+            fontWeight = headingWeight,
+            style = textStyle,
         )
     }
 }

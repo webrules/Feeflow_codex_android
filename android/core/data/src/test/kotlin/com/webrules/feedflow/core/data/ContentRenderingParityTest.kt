@@ -70,6 +70,28 @@ class ContentRenderingParityTest {
         assertEquals("https://cdn.example.com/a.png", images[1].url)
     }
 
+    @Test fun parsedContentPromotesMarkdownHeadingsToHeadingBlocks() {
+        val blocks = FeedflowContentRenderer.parseBlocks(
+            """
+            Intro paragraph.
+
+            ## Article Section
+
+            Body paragraph.
+            • First bullet
+            • Second bullet
+            [QUOTE]quoted paragraph[/QUOTE]
+            """.trimIndent(),
+        )
+
+        assertIs<ContentBlock.Text>(blocks[0])
+        val heading = assertIs<ContentBlock.Heading>(blocks[1])
+        assertEquals(2, heading.level)
+        assertEquals("Article Section", (heading.segments.single() as LinkSegment.Plain).text)
+        assertIs<ContentBlock.Text>(blocks[2])
+        assertIs<ContentBlock.Quote>(blocks[3])
+    }
+
     @Test fun urlBookmarkRelativeTimeMatchesIosThresholds() {
         assertEquals("just now", UrlBookmarkRelativeTime.format(Duration.ofSeconds(59)))
         assertEquals("1m", UrlBookmarkRelativeTime.format(Duration.ofSeconds(60)))

@@ -338,26 +338,54 @@ object RssContentCleaner {
             .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
         processed = Regex("<img[^>]+src=[\"']([^\"'>]+)[\"'][^>]*>", RegexOption.IGNORE_CASE)
             .replace(processed) { "\n[IMAGE:${it.groupValues[1]}]\n" }
+        processed = Regex("<h([1-6])\\b[^>]*>([\\s\\S]*?)</h\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) { match ->
+                val level = match.groupValues[1].toIntOrNull()?.coerceIn(1, 6) ?: 2
+                "\n\n${"#".repeat(level)} ${match.groupValues[2].stripHtmlInline()}\n\n"
+            }
+        processed = Regex("<blockquote\\b[^>]*>([\\s\\S]*?)</blockquote>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) { match ->
+                val quote = clean(match.groupValues[1])
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
+                if (quote.isBlank()) "" else "\n\n[QUOTE]$quote[/QUOTE]\n\n"
+            }
+        processed = Regex("<li\\b[^>]*>([\\s\\S]*?)</li>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) { "\n• ${it.groupValues[1].stripHtmlInline()}" }
         processed = processed
-            .replace("<br />", "\n")
-            .replace("<br>", "\n")
-            .replace("</p>", "\n\n")
-            .replace("<p>", "")
-            .replace("</div>", "\n")
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("</(p|div|section|article|main|tr|table|ul|ol)>", RegexOption.IGNORE_CASE), "\n\n")
+            .replace(Regex("<(p|div|section|article|main|tr|table|ul|ol)\\b[^>]*>", RegexOption.IGNORE_CASE), "\n")
         processed = Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .replace(processed) {
                 val href = it.groupValues[1]
                 if (href.startsWith("#") || href.startsWith("javascript:", ignoreCase = true)) {
-                    it.groupValues[2].stripTags()
+                    it.groupValues[2].stripHtmlInline()
                 } else {
-                    val title = it.groupValues[2].stripTags().ifBlank { href }
+                    val title = it.groupValues[2].stripHtmlInline().ifBlank { href }
                     "[LINK:$href|$title]"
                 }
             }
-        return processed.stripTags().decodeHtmlEntities()
+        return processed
+            .replace(Regex("<[^>]+>"), "")
+            .decodeHtmlEntities()
+            .replace("\u00A0", " ")
+            .lineSequence()
+            .map { line -> line.trim().replace(Regex("[ \\t]{2,}"), " ") }
+            .joinToString("\n")
             .replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n")
             .trim()
     }
+
+    private fun String.stripHtmlInline(): String =
+        replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("<[^>]+>"), "")
+            .decodeHtmlEntities()
+            .replace("\u00A0", " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 }
 
 object RssArticleExtractor {
