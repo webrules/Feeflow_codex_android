@@ -48,6 +48,7 @@ class ContentRenderingParityTest {
     }
 
     @Test fun hackerNewsAndV2exDetailsUseBodyColorForLinks() {
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.Rss))
         assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.HackerNews))
         assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.V2ex))
         assertTrue(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.FourD4Y))

@@ -276,7 +276,7 @@ class ParsingAndAccessibilityParityTest {
                 <item>
                   <title><![CDATA[Fallback Item]]></title>
                   <link>https://example.com/fallback</link>
-                  <description><![CDATA[<p>Fallback body</p>]]></description>
+                  <description><![CDATA[<p>Fallback body</p>]]><![CDATA[<p>Second CDATA body</p>]]></description>
                 </item>
               </channel>
             </rss>
@@ -285,6 +285,9 @@ class ParsingAndAccessibilityParityTest {
         assertEquals("Fallback Item", item.title)
         assertEquals("https://example.com/fallback", item.link)
         assertTrue(item.content.contains("Fallback body"))
+        assertTrue(item.content.contains("Second CDATA body"))
+        assertFalse(item.content.contains("<![CDATA["))
+        assertFalse(item.content.contains("]]>"))
     }
 
     @Test fun opmlParserUsesTextTitleUrlFallback() {

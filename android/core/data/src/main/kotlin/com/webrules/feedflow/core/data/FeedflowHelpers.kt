@@ -278,8 +278,8 @@ class RssParser(private val data: ByteArray) {
         }.orEmpty()
 
     private fun String.stripCdata(): String =
-        replace(Regex("""^\s*<!\[CDATA\[""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\]\]>\s*$"""), "")
+        replace(Regex("""<!\[CDATA\[""", RegexOption.IGNORE_CASE), "")
+            .replace("]]>", "")
 
     private fun String.atomLinkText(): String {
         Regex("""<link\b([^>]*)/?>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
