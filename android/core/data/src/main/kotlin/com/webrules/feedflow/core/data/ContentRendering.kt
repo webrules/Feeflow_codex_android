@@ -53,7 +53,11 @@ object ThreadRowRenderingPolicy {
 
 object ThreadDetailRenderingPolicy {
     fun usesAccentLinkColor(site: ForumSite): Boolean =
-        site != ForumSite.Rss && site != ForumSite.HackerNews && site != ForumSite.V2ex
+        site != ForumSite.Rss &&
+            site != ForumSite.HackerNews &&
+            site != ForumSite.V2ex &&
+            site != ForumSite.FourD4Y &&
+            site != ForumSite.Zhihu
 }
 
 object UrlBookmarkRelativeTime {

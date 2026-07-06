@@ -438,7 +438,8 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 communities = content.value,
                 isLoading = content.isLoading,
                 warning = content.warning,
-                loginRequired = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
+                loginRequired = current.site.requiresLogin &&
+                    (!homeState.signedInSites.contains(current.site) || shouldShowLoginForWarning(current.site, content.warning)),
                 onBack = { route = FeedflowRoute.SiteList },
                 onHome = { route = FeedflowRoute.SiteList },
                 onRefresh = { refreshToken += 1 },
@@ -487,7 +488,8 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
-                loginRequired = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
+                loginRequired = current.site.requiresLogin &&
+                    (!homeState.signedInSites.contains(current.site) || shouldShowLoginForWarning(current.site, content.warning)),
                 anchorThreadId = current.anchorThreadId,
                 onBack = { route = FeedflowRoute.Communities(current.site) },
                 onHome = { route = FeedflowRoute.SiteList },
@@ -563,6 +565,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
+                loginRequired = shouldShowLoginForWarning(current.site, content.warning),
                 webUrl = appStateController.webUrl(current.site, content.value.thread),
                 hasPrevious = activeIndex > 0,
                 hasNext = activeIndex >= 0 && activeIndex < contextThreads.size - 1,
@@ -587,6 +590,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 },
                 onBack = { route = current.detailReturnRoute(content.value.thread) },
                 onHome = { route = FeedflowRoute.SiteList },
+                onLoginRequired = { route = FeedflowRoute.WebLogin(current.site, current) },
                 onAiSummary = {
                     route = FeedflowRoute.AiSummary(
                         current.site,
@@ -1052,6 +1056,7 @@ private fun ThreadDetailScreen(
     isLoading: Boolean,
     warning: String?,
     loadedFromCache: Boolean,
+    loginRequired: Boolean,
     webUrl: String,
     hasPrevious: Boolean,
     hasNext: Boolean,
@@ -1061,6 +1066,7 @@ private fun ThreadDetailScreen(
     onLoadMore: suspend () -> Unit,
     onBack: () -> Unit,
     onHome: () -> Unit,
+    onLoginRequired: () -> Unit,
     onAiSummary: () -> Unit,
     onOpenBrowser: () -> Unit,
     onOpenLink: (String, String) -> Unit,
@@ -1249,6 +1255,9 @@ private fun ThreadDetailScreen(
                     item { FeedflowProgressLine(isLoading) }
                     warning?.let {
                         item { WarningCard(if (loadedFromCache) stringResource(R.string.showing_cached_thread, it) else it) }
+                    }
+                    if (loginRequired) {
+                        item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
                     }
                     actionError?.let {
                         item { WarningCard(it) }
@@ -3085,6 +3094,15 @@ private fun threadListWarning(site: ForumSite, warning: String): String =
     } else {
         warning
     }
+
+private fun shouldShowLoginForWarning(site: ForumSite, warning: String?): Boolean {
+    if (site != ForumSite.FourD4Y || warning.isNullOrBlank()) return false
+    return warning.contains("Authentication required", ignoreCase = true) ||
+        warning.contains("login", ignoreCase = true) ||
+        warning.contains("auth", ignoreCase = true) ||
+        warning.contains("登录") ||
+        warning.contains("未登录")
+}
 
 @Composable
 private fun WarningCard(message: String) {

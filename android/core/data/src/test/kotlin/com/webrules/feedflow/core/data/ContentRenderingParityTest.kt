@@ -51,7 +51,9 @@ class ContentRenderingParityTest {
         assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.Rss))
         assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.HackerNews))
         assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.V2ex))
-        assertTrue(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.FourD4Y))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.FourD4Y))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.Zhihu))
+        assertTrue(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.LinuxDo))
     }
 
     @Test fun parsedContentSplitsQuotesImagesAndDedupesZhihuVariants() {
