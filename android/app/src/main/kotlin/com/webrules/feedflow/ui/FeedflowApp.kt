@@ -177,6 +177,7 @@ import com.webrules.feedflow.core.data.SearchResult
 import com.webrules.feedflow.core.data.SiteLoginConfig
 import com.webrules.feedflow.core.data.SpeechPlaybackState
 import com.webrules.feedflow.core.data.SpeechSynthesisConfig
+import com.webrules.feedflow.core.data.ThreadDetailRenderingPolicy
 import com.webrules.feedflow.core.data.ThreadRowRenderingPolicy
 import com.webrules.feedflow.core.data.UrlBookmarkRelativeTime
 import com.webrules.feedflow.core.database.FeedflowDatabaseContract
@@ -744,7 +745,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             authCoordinator = authCoordinator,
             cookieBridge = cookieBridge,
             storedCookies = store.getCookies(current.site.serviceId).orEmpty(),
+            validateSession = { appStateController.restoreSession(current.site) },
             onAccepted = {
+                appStateController.sessionChanged(current.site)
                 appStateController.setSignedIn(current.site, true)
                 homeState = appStateController.homeState
                 route = if (current.returnTo == FeedflowRoute.Login) {
@@ -1271,6 +1274,7 @@ private fun ThreadDetailScreen(
                                 content = thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) },
                                 onImageClick = onOpenImage,
                                 onLinkClick = onOpenLink,
+                                useAccentLinkColor = ThreadDetailRenderingPolicy.usesAccentLinkColor(site),
                             )
                             firstImageUrl?.let { imageUrl ->
                                 TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
@@ -1290,6 +1294,7 @@ private fun ThreadDetailScreen(
                                 canReply = site.supportsCommenting,
                                 hideAvatar = site == ForumSite.HackerNews,
                                 onLinkClick = onOpenLink,
+                                useAccentLinkColor = ThreadDetailRenderingPolicy.usesAccentLinkColor(site),
                                 onReply = {
                                     replyState = replyState.copy(
                                         replyingToCommentId = comment.id,
@@ -2052,27 +2057,43 @@ private fun WebLoginSheetScreen(
     authCoordinator: AuthSessionCoordinator,
     cookieBridge: AndroidWebLoginCookieBridge,
     storedCookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
+    validateSession: suspend () -> Boolean,
     onAccepted: () -> Unit,
     onClose: () -> Unit,
 ) {
     val config = SiteLoginConfig.forSite(site)
+    val scope = rememberCoroutineScope()
+    val verificationFailureMessage = stringResource(R.string.login_verification_failed)
     var accepted by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
     var saveError by remember { mutableStateOf<String?>(null) }
     var currentUrl by remember(config) { mutableStateOf(config?.loginUrl) }
+    var capturedFourD4YSid by remember { mutableStateOf<String?>(null) }
     fun saveSession() {
         if (isSaving || accepted || config == null) return
         isSaving = true
         saveError = null
         when (val result = cookieBridge.capture(site, config, currentUrl, authCoordinator)) {
             is LoginCaptureResult.Success -> {
-                accepted = true
                 cookieBridge.flush()
-                onAccepted()
+                if (site == ForumSite.FourD4Y) {
+                    authCoordinator.rememberFourD4YSid(capturedFourD4YSid)
+                }
+                scope.launch {
+                    if (validateSession()) {
+                        accepted = true
+                        onAccepted()
+                    } else {
+                        saveError = verificationFailureMessage
+                    }
+                    isSaving = false
+                }
             }
-            is LoginCaptureResult.Rejected -> saveError = result.reason.name
+            is LoginCaptureResult.Rejected -> {
+                saveError = result.reason.name
+                isSaving = false
+            }
         }
-        isSaving = false
     }
     Scaffold(
         bottomBar = {
@@ -2103,7 +2124,31 @@ private fun WebLoginSheetScreen(
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     currentUrl = url
-                                    if (config != null && url != null && (config.isPostLoginNavigation(url) || !config.isLoginUrl(url))) {
+                                    val shouldSave = config != null && url != null &&
+                                        (config.isPostLoginNavigation(url) || !config.isLoginUrl(url))
+                                    if (site == ForumSite.FourD4Y && view != null) {
+                                        capturedFourD4YSid = url
+                                            ?.let { Regex("""[?&]sid=([A-Za-z0-9]+)""").find(it)?.groupValues?.get(1) }
+                                            ?: capturedFourD4YSid
+                                        view.evaluateJavascript(
+                                            """
+                                            (function() {
+                                              for (const link of document.links) {
+                                                const match = link.href.match(/[?&]sid=([A-Za-z0-9]+)/);
+                                                if (match) return match[1];
+                                              }
+                                              return "";
+                                            })()
+                                            """.trimIndent(),
+                                        ) { value ->
+                                            capturedFourD4YSid = value
+                                                .trim()
+                                                .removeSurrounding("\"")
+                                                .takeIf { it.matches(Regex("[A-Za-z0-9]+")) }
+                                                ?: capturedFourD4YSid
+                                            if (shouldSave) saveSession()
+                                        }
+                                    } else if (shouldSave) {
                                         saveSession()
                                     }
                                 }
@@ -2592,7 +2637,14 @@ private fun ThreadRow(
 
 @Composable
 private fun CommentRow(comment: Comment) {
-    CommentRow(comment = comment, canReply = false, hideAvatar = false, onLinkClick = null, onReply = {})
+    CommentRow(
+        comment = comment,
+        canReply = false,
+        hideAvatar = false,
+        onLinkClick = null,
+        useAccentLinkColor = true,
+        onReply = {},
+    )
 }
 
 @Composable
@@ -2601,6 +2653,7 @@ private fun CommentRow(
     canReply: Boolean,
     hideAvatar: Boolean,
     onLinkClick: ((String, String) -> Unit)? = null,
+    useAccentLinkColor: Boolean,
     onReply: () -> Unit,
 ) {
     Row(
@@ -2621,7 +2674,11 @@ private fun CommentRow(
                 Spacer(Modifier.weight(1f))
                 Text(comment.timeAgo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            ParsedContent(comment.content, onLinkClick = onLinkClick)
+            ParsedContent(
+                comment.content,
+                onLinkClick = onLinkClick,
+                useAccentLinkColor = useAccentLinkColor,
+            )
             if (comment.likeCount > 0) ThreadMetricPill(icon = "hand.thumbsup", text = "${comment.likeCount}")
         }
     }
@@ -3435,11 +3492,12 @@ private fun ParsedContent(
     content: String,
     onImageClick: ((String) -> Unit)? = null,
     onLinkClick: ((String, String) -> Unit)? = null,
+    useAccentLinkColor: Boolean = true,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FeedflowContentRenderer.parseBlocks(content).forEach { block ->
             when (block) {
-                is ContentBlock.Text -> LinkedText(block.segments, onLinkClick)
+                is ContentBlock.Text -> LinkedText(block.segments, onLinkClick, useAccentLinkColor)
                 is ContentBlock.Quote -> Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3449,7 +3507,7 @@ private fun ParsedContent(
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(Modifier.size(width = 3.dp, height = 42.dp).background(MaterialTheme.colorScheme.outline))
-                        LinkedText(block.segments, onLinkClick)
+                        LinkedText(block.segments, onLinkClick, useAccentLinkColor)
                     }
                 }
                 is ContentBlock.Image -> coil.compose.AsyncImage(
@@ -3467,7 +3525,12 @@ private fun ParsedContent(
 }
 
 @Composable
-private fun LinkedText(segments: List<LinkSegment>, onLinkClick: ((String, String) -> Unit)? = null) {
+private fun LinkedText(
+    segments: List<LinkSegment>,
+    onLinkClick: ((String, String) -> Unit)? = null,
+    useAccentLinkColor: Boolean = true,
+) {
+    val linkColor = if (useAccentLinkColor) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
     val single = segments.singleOrNull() as? LinkSegment.Link
     if (single != null) {
         ForumCard(
@@ -3477,7 +3540,7 @@ private fun LinkedText(segments: List<LinkSegment>, onLinkClick: ((String, Strin
                 Modifier.fillMaxWidth()
             },
         ) {
-            Text(single.title, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            Text(single.title, color = linkColor, fontWeight = FontWeight.SemiBold)
             Text(single.url, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     } else {
@@ -3495,7 +3558,7 @@ private fun LinkedText(segments: List<LinkSegment>, onLinkClick: ((String, Strin
                 Modifier
             },
             style = MaterialTheme.typography.bodyMedium,
-            color = if (firstLink != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            color = if (firstLink != null) linkColor else MaterialTheme.colorScheme.onSurface,
         )
     }
 }

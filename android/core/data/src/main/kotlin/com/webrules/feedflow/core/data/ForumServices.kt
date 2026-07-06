@@ -80,9 +80,7 @@ fun ForumSite.makeService(
 ): ForumService = when (this) {
     ForumSite.Rss -> RssService(
         httpClient = httpClient,
-        initialFeeds = store?.getRssFeeds()?.takeIf { it.isNotEmpty() }?.map { feed ->
-            RssFeedInfo(id = feed.url, name = feed.title, url = feed.url, description = "")
-        } ?: RssService.defaultFeeds,
+        store = store,
     )
     ForumSite.HackerNews -> HackerNewsService(httpClient)
     ForumSite.FourD4Y -> FourD4YService(store, httpClient)
@@ -120,6 +118,7 @@ data class RssFeedInfo(
 
 class RssService(
     private val httpClient: FeedflowHttpClient = UnimplementedFeedflowHttpClient(),
+    private val store: FeedflowStore? = null,
     initialFeeds: List<RssFeedInfo> = defaultFeeds,
 ) : StaticForumService() {
     override val name = "RSS Feeds"
@@ -127,12 +126,16 @@ class RssService(
     override val logo = "feed"
     private val feeds = initialFeeds.toMutableList()
     private val threadCache = linkedMapOf<String, FeedThread>()
+    private val currentFeeds: List<RssFeedInfo>
+        get() = store?.getRssFeeds()?.takeIf { it.isNotEmpty() }?.map { feed ->
+            RssFeedInfo(id = feed.url, name = feed.title, url = feed.url, description = "")
+        } ?: feeds
 
     override suspend fun fetchCategories(): List<Community> =
-        feeds.map { Community(it.id, it.name, it.description, "RSS", 0, 0) }
+        currentFeeds.map { Community(it.id, it.name, it.description, "RSS", 0, 0) }
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
-        val feed = feeds.firstOrNull { it.id == categoryId } ?: throw FeedflowError.Network(url = categoryId, statusCode = 404, bodyPreview = "Feed not found")
+        val feed = currentFeeds.firstOrNull { it.id == categoryId } ?: throw FeedflowError.Network(url = categoryId, statusCode = 404, bodyPreview = "Feed not found")
         val xml = httpClient.get(feed.url)
         val community = communities.firstOrNull { it.id == categoryId }
             ?: Community(categoryId, feed.name, feed.description, "RSS", 0, 0)
@@ -297,7 +300,7 @@ class V2exService(
                 id = topic.id,
                 title = topic.title,
                 content = "",
-                author = User(topic.author, topic.author, "person.circle"),
+                author = User(topic.author, topic.author, topic.avatar.ifBlank { "person.circle" }),
                 community = community,
                 timeAgo = "",
                 likeCount = 0,
@@ -327,10 +330,11 @@ class V2exService(
         val title = V2exParser.parseTopicTitle(html).ifBlank { "V2EX" }
         val content = V2exParser.parseTopicContent(html)
         val author = V2exParser.parseTopicAuthor(html).ifBlank { "V2EX" }
+        val authorAvatar = V2exParser.parseTopicAvatar(html, author)
         val replies = V2exParser.parseReplies(html).map { reply ->
             Comment(
                 id = reply.id,
-                author = User(reply.author, reply.author, "person.circle"),
+                author = User(reply.author, reply.author, reply.avatar.ifBlank { "person.circle" }),
                 content = reply.content,
                 timeAgo = reply.timeAgo,
                 likeCount = 0,
@@ -340,7 +344,7 @@ class V2exService(
             id = threadId,
             title = title,
             content = content,
-            author = User(author, author, "person.circle"),
+            author = User(author, author, authorAvatar.ifBlank { "person.circle" }),
             community = Community("v2ex", "V2EX", "", "V2EX", 0, 0),
             timeAgo = "",
             likeCount = 0,
@@ -1020,6 +1024,7 @@ class FourD4YService(
         return when {
             first.isBlank() -> null
             first.startsWith("//") -> "https:$first"
+            first.startsWith("http://", ignoreCase = true) -> "https://${first.substringAfter("://")}"
             first.startsWith("http") -> first
             first.startsWith("/") -> "https://www.4d4y.com$first"
             first.startsWith("uc_server/") -> "https://www.4d4y.com/$first"

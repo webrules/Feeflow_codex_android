@@ -7,6 +7,8 @@ import com.webrules.feedflow.core.model.Community
 import com.webrules.feedflow.core.model.FeedThread
 import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.model.User
+import com.webrules.feedflow.core.network.FeedflowCookie
+import com.webrules.feedflow.core.network.FeedflowHttpClient
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -50,6 +52,55 @@ class FeedflowRepositoryCacheParityTest {
         val repository = FeedflowRepository(store = store, serviceFactory = { SucceedingService(listOf(hnCommunity), emptyList()) })
         assertEquals(emptyList(), repository.loadThreads(ForumSite.HackerNews, hnCommunity).fresh)
         }
+    }
+
+    @Test fun rssListAndDetailReuseTheSameServiceInstance() = runBlocking {
+        val client = object : FeedflowHttpClient {
+            override suspend fun get(url: String, cookies: List<FeedflowCookie>): String = """
+                <rss><channel><item>
+                  <title>Full RSS article</title>
+                  <link>https://example.com/full-article</link>
+                  <description><![CDATA[<p>Complete article body.</p>]]></description>
+                  <author>Writer</author>
+                </item></channel></rss>
+            """.trimIndent()
+
+            override suspend fun post(
+                url: String,
+                body: String,
+                cookies: List<FeedflowCookie>,
+                contentType: String,
+            ): String = error("Unexpected POST")
+        }
+        val repository = FeedflowRepository(
+            store = InMemoryFeedflowStore(),
+            httpClient = client,
+        )
+        val rssCommunity = repository.loadCommunities(ForumSite.Rss).fresh!!.first()
+        val listedThread = repository.loadThreads(ForumSite.Rss, rssCommunity).fresh!!.single()
+
+        val detail = repository.loadThreadDetail(ForumSite.Rss, listedThread).fresh!!.first
+
+        assertEquals("Full RSS article", detail.title)
+        assertEquals("Complete article body.", detail.content)
+    }
+
+    @Test fun fourD4YMemberCommunitiesSurviveSmallerGuestResponse() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        val memberCommunities = listOf(
+            Community("2", "Public", "", "4D4Y", 0, 0),
+            Community("99", "Discovery", "", "4D4Y", 0, 0),
+        )
+        store.saveCommunities(memberCommunities, ForumSite.FourD4Y.serviceId)
+        val repository = FeedflowRepository(
+            store = store,
+            serviceFactory = { SucceedingService(memberCommunities.take(1), emptyList()) },
+        )
+
+        val result = repository.loadCommunities(ForumSite.FourD4Y)
+
+        assertEquals(memberCommunities, result.fresh)
+        assertEquals(memberCommunities, store.getCommunities(ForumSite.FourD4Y.serviceId))
     }
 
     @Test fun loadDetailIgnoresInvalidFourD4YCacheAndCachesFreshDetail() {

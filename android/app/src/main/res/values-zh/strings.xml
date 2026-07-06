@@ -87,6 +87,7 @@
     <string name="login_or">或</string>
     <string name="login_with_provider">快捷登录</string>
     <string name="login_success">登录成功！</string>
+    <string name="login_verification_failed">网页登录尚未验证应用请求。请完成登录后重新保存。</string>
     <string name="login_web_note">您将被重定向到网站进行登录。您的会话 Cookie 将保存在本地以供后续使用。</string>
     <string name="login_status">状态</string>
     <string name="signed_in">已登录</string>

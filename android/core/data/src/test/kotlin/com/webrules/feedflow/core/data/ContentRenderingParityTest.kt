@@ -47,6 +47,12 @@ class ContentRenderingParityTest {
         assertEquals("Example", single?.title)
     }
 
+    @Test fun hackerNewsAndV2exDetailsUseBodyColorForLinks() {
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.HackerNews))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.V2ex))
+        assertTrue(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.FourD4Y))
+    }
+
     @Test fun parsedContentSplitsQuotesImagesAndDedupesZhihuVariants() {
         val blocks = FeedflowContentRenderer.parseBlocks(
             """

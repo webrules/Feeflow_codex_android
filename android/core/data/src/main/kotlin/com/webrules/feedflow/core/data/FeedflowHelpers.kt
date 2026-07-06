@@ -715,6 +715,7 @@ object HackerNewsContentCleaner {
                 val value = raw.decodeHtmlEntities().trim()
                 return when {
                     value.startsWith("//") -> "https:$value"
+                    value.startsWith("http://", ignoreCase = true) -> "https://${value.substringAfter("://")}"
                     value.startsWith("http") -> value
                     value.startsWith("/") -> "https://www.4d4y.com$value"
                     value.startsWith("uc_server/") -> "https://www.4d4y.com/$value"
@@ -846,8 +847,21 @@ object HackerNewsContentCleaner {
         }
     }
 
-    data class V2exTopic(val id: String, val title: String, val author: String, val replies: Int)
-    data class V2exReply(val id: String, val author: String, val content: String, val timeAgo: String)
+    data class V2exTopic(
+        val id: String,
+        val title: String,
+        val author: String,
+        val avatar: String,
+        val replies: Int,
+    )
+
+    data class V2exReply(
+        val id: String,
+        val author: String,
+        val avatar: String,
+        val content: String,
+        val timeAgo: String,
+    )
 
     object V2exParser {
         val tabs = listOf("tech", "creative", "play", "apple", "jobs", "deals", "city", "qna", "hot", "all", "r2", "xna", "planet")
@@ -870,17 +884,19 @@ object HackerNewsContentCleaner {
                     val topic = Regex("""<a href=["']/t/(\d+)[^"']*["'] class=["']topic-link["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(cell)
                         ?: return@mapNotNull null
                     val author = Regex("""href=["']/member/([^"']+)["']""", RegexOption.IGNORE_CASE).find(cell)?.groupValues?.get(1).orEmpty()
+                    val avatar = extractAvatar(cell)
                     val replies = Regex("""class=["']count_livid["']>(\d+)</a>""", RegexOption.IGNORE_CASE).find(cell)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                    V2exTopic(topic.groupValues[1], topic.groupValues[2].stripTags().decodeHtmlEntities(), author, replies)
+                    V2exTopic(topic.groupValues[1], topic.groupValues[2].stripTags().decodeHtmlEntities(), author, avatar, replies)
                 }
 
         fun parseReplies(html: String): List<V2exReply> =
             html.split(Regex("""id=["']r_""", RegexOption.IGNORE_CASE)).drop(1).mapNotNull { block ->
                 val id = Regex("""^(\d+)""").find(block)?.groupValues?.get(1) ?: return@mapNotNull null
                 val author = Regex("""class=["']dark["'][^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty()
+                val avatar = extractAvatar(block)
                 val content = Regex("""class=["']reply_content["'][^>]*>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1)?.let(::cleanContent).orEmpty()
                 val time = Regex("""class=["']ago["'][^>]*>([^<]+)</span>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty()
-                V2exReply(id, author.decodeHtmlEntities(), content, time)
+                V2exReply(id, author.decodeHtmlEntities(), avatar, content, time)
             }
 
         fun parseTopicTitle(html: String): String =
@@ -896,6 +912,17 @@ object HackerNewsContentCleaner {
         fun parseTopicAuthor(html: String): String =
             Regex("""href=["']/member/([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1).orEmpty()
 
+        fun parseTopicAvatar(html: String, author: String): String {
+            if (author.isNotBlank()) {
+                val authorBlock = Regex(
+                    """<a[^>]+href=["']/member/${Regex.escape(author)}["'][^>]*>\s*(<img[^>]+>)""",
+                    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+                ).find(html)?.groupValues?.get(1)
+                extractAvatar(authorBlock.orEmpty()).takeIf { it.isNotBlank() }?.let { return it }
+            }
+            return extractAvatar(html)
+        }
+
         fun cleanContent(html: String): String =
             Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE)
                 .replace(html) { "\n[IMAGE:${normalizeUrl(it.groupValues[1])}]\n" }
@@ -908,6 +935,19 @@ object HackerNewsContentCleaner {
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> "https://v2ex.com$url"
             else -> url
+        }
+
+        private fun extractAvatar(html: String): String {
+            val tag = Regex(
+                """<img\b(?=[^>]*class=["'][^"']*\bavatar\b[^"']*["'])[^>]*>""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).find(html)?.value ?: return ""
+            val raw = Regex("""(?:src|data-src)=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(tag)
+                ?.groupValues
+                ?.get(1)
+                ?: return ""
+            return normalizeUrl(raw.decodeHtmlEntities())
         }
     }
 

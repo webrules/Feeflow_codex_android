@@ -347,13 +347,16 @@ class RemainingSourceParserParityTest {
         val categories = FourD4YParser.parseCategories("""<a href="forumdisplay.php?fid=2">Discovery</a><a href="forumdisplay.php?fid=7">交易</a>""")
         assertEquals(listOf("2", "7"), categories.map { it.id })
         val rows = FourD4YParser.parseThreadRows(
-            """<tbody id="normalthread_42"><a href="viewthread.php?tid=42">标题&amp;A</a><td class="author"><a href="space.php?action=viewpro&amp;uid=12345">joe</a></td><td class="nums"><strong>9</strong></td></tbody>""",
+            """<tbody id="normalthread_42"><img class="avatar" src="http://img02.4d4y.com/forum/uc_server/data/avatar/000/01/23/45_avatar_middle.jpg"><a href="viewthread.php?tid=42">标题&amp;A</a><td class="author"><a href="space.php?action=viewpro&amp;uid=12345">joe</a></td><td class="nums"><strong>9</strong></td></tbody>""",
             categories.first(),
         )
         assertEquals("标题&A", rows.single().title)
         assertEquals("12345", rows.single().author.id)
         assertEquals("joe", rows.single().author.username)
-        assertTrue(rows.single().author.avatar.endsWith("/000/01/23/45_avatar_middle.jpg"))
+        assertEquals(
+            "https://img02.4d4y.com/forum/uc_server/data/avatar/000/01/23/45_avatar_middle.jpg",
+            rows.single().author.avatar,
+        )
         assertEquals(9, rows.single().commentCount)
         val searchRows = FourD4YParser.parseSearchThreads(
             """
@@ -378,16 +381,25 @@ class RemainingSourceParserParityTest {
         assertEquals("12345", V2exParser.extractOnce("""<input name="once" value="12345">"""))
         assertEquals("678", V2exParser.extractOnce("""var once = "678";"""))
         val html = """
-            <div class="cell item"><a href="/t/100#reply1" class="topic-link">Hello &amp; V2EX</a><a href="/member/alice">alice</a><a class="count_livid">12</a></div>
+            <div class="cell item"><a href="/member/alice"><img src="//cdn.v2ex.com/avatar/alice.png" class="avatar"></a><a href="/t/100#reply1" class="topic-link">Hello &amp; V2EX</a><a href="/member/alice">alice</a><a class="count_livid">12</a></div>
             <div class="cell item"><a href="/t/101" class="topic-link">Second</a><a href="/member/bob">bob</a></div>
         """.trimIndent()
         val topics = V2exParser.parseThreadList(html)
         assertEquals(listOf("100", "101"), topics.map { it.id })
         assertEquals("Hello & V2EX", topics.first().title)
+        assertEquals("https://cdn.v2ex.com/avatar/alice.png", topics.first().avatar)
         assertEquals(12, topics.first().replies)
-        val replies = V2exParser.parseReplies("""<div id="r_99" class="cell"><a class="dark">alice</a><span class="ago">1h</span><div class="reply_content">Hi<br><img src="//img.test/a.png"></div></div>""")
+        val replies = V2exParser.parseReplies("""<div id="r_99" class="cell"><img src="https://cdn.v2ex.com/avatar/reply.png" class="avatar"><a class="dark">alice</a><span class="ago">1h</span><div class="reply_content">Hi<br><img src="//img.test/a.png"></div></div>""")
         assertEquals("99", replies.single().id)
+        assertEquals("https://cdn.v2ex.com/avatar/reply.png", replies.single().avatar)
         assertTrue(replies.single().content.contains("[IMAGE:https://img.test/a.png]"))
+        assertEquals(
+            "https://cdn.v2ex.com/avatar/topic.png",
+            V2exParser.parseTopicAvatar(
+                """<a href="/member/alice"><img class="avatar" src="//cdn.v2ex.com/avatar/topic.png"></a>""",
+                "alice",
+            ),
+        )
         assertEquals("https://v2ex.com/path", V2exParser.normalizeUrl("/path"))
     }
 

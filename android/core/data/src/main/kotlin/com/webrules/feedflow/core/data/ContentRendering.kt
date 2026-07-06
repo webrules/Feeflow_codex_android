@@ -50,6 +50,11 @@ object ThreadRowRenderingPolicy {
         value?.replace(Regex("""^\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*"""), "")?.ifBlank { null }
 }
 
+object ThreadDetailRenderingPolicy {
+    fun usesAccentLinkColor(site: ForumSite): Boolean =
+        site != ForumSite.HackerNews && site != ForumSite.V2ex
+}
+
 object UrlBookmarkRelativeTime {
     fun format(age: Duration): String {
         val seconds = age.seconds.coerceAtLeast(0)
