@@ -229,6 +229,7 @@ class ParsingAndAccessibilityParityTest {
                   <guid>guid-1</guid>
                   <dc:creator>Alice</dc:creator>
                   <pubDate>Sat, 07 Sep 2002 00:00:01 GMT</pubDate>
+                  <description><![CDATA[Short summary only.]]></description>
                   <content:encoded><![CDATA[<p>Hello <a href="https://example.com">site</a></p><script>x()</script><img src="https://example.com/a.png" />]]></content:encoded>
                 </item>
               </channel>
@@ -240,6 +241,7 @@ class ParsingAndAccessibilityParityTest {
         assertEquals("Alice", item.author)
         assertEquals("guid-1", item.id)
         val cleaned = RssContentCleaner.clean(item.content)
+        assertFalse(cleaned.contains("Short summary only."))
         assertTrue(cleaned.contains("[LINK:https://example.com|site]"))
         assertTrue(cleaned.contains("[IMAGE:https://example.com/a.png]"))
         assertFalse(cleaned.contains("script"))
@@ -315,7 +317,16 @@ class ReadOnlySourceParityTest {
         val feedUrl = RssService.defaultFeeds.first().url
         val client = FixtureHttpClient(
             mapOf(
-                feedUrl to """<rss><channel><item><title>RSS Item</title><link>https://example.com/rss</link><description><![CDATA[<p>Body</p>]]></description></item></channel></rss>""",
+                feedUrl to """<rss><channel><item><title>RSS Item</title><link>https://example.com/rss</link><description><![CDATA[<p>Summary only.</p>]]></description></item></channel></rss>""",
+                "https://example.com/rss" to """
+                    <html><body>
+                      <nav>Menu chrome</nav>
+                      <article>
+                        <p>This is the full article body with enough extra words to prove RSS detail pages no longer stop at feed summaries.</p>
+                        <p>It includes a second paragraph and a <a href="/more">relative link</a> that should survive cleaning.</p>
+                      </article>
+                    </body></html>
+                """.trimIndent(),
             ),
         )
         val service = RssService(client)
@@ -323,10 +334,14 @@ class ReadOnlySourceParityTest {
         assertEquals(listOf("hacker_podcast", "ruanyifeng", "oreilly"), categories.map { it.id })
         val threads = service.fetchCategoryThreads("hacker_podcast", categories, page = 99)
         assertEquals("https://example.com/rss", threads.single().id)
-        assertEquals("Body", threads.single().content)
+        assertEquals("Summary only.", threads.single().content)
         assertEquals("https://example.com/rss", service.getWebUrl(threads.single()))
         val detail = service.fetchThreadDetail("https://example.com/rss", page = 1)
         assertEquals("RSS Item", detail.thread.title)
+        assertTrue(detail.thread.content.contains("full article body"))
+        assertTrue(detail.thread.content.contains("[LINK:https://example.com/more|relative link]"))
+        assertFalse(detail.thread.content.contains("Summary only."))
+        assertFalse(detail.thread.content.contains("Menu chrome"))
         assertEquals(1, detail.totalPages)
     }
 }

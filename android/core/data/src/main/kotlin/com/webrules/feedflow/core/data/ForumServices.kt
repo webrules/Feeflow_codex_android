@@ -153,9 +153,9 @@ class RssService(
         }
     }
 
-    override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult =
-        ThreadDetailResult(
-            thread = threadCache[threadId] ?: FeedThread(
+    override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
+        val cachedThread = threadCache[threadId]
+        val thread = cachedThread?.withFullArticleContent() ?: FeedThread(
                 id = threadId,
                 title = "Content Unavailable",
                 content = "Please refresh the feed list.",
@@ -164,10 +164,29 @@ class RssService(
                 timeAgo = "",
                 likeCount = 0,
                 commentCount = 0,
-            ),
+            )
+        if (cachedThread != null) threadCache[threadId] = thread
+        return ThreadDetailResult(
+            thread = thread,
             comments = emptyList(),
             totalPages = 1,
         )
+    }
+
+    private suspend fun FeedThread.withFullArticleContent(): FeedThread {
+        if (!id.startsWith("http://", ignoreCase = true) && !id.startsWith("https://", ignoreCase = true)) return this
+        val article = runCatching {
+            RssArticleExtractor.extract(
+                html = httpClient.get(id),
+                pageUrl = id,
+            )
+        }.getOrDefault("")
+        return if (RssArticleExtractor.isMeaningfullyMoreComplete(content, article)) {
+            copy(content = article)
+        } else {
+            this
+        }
+    }
 
     override fun getWebUrl(thread: FeedThread): String = thread.id
 

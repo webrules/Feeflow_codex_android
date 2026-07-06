@@ -9,6 +9,7 @@ import com.webrules.feedflow.core.network.FeedflowCookie
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
@@ -181,7 +182,7 @@ class RssParser(private val data: ByteArray) {
                 ParsedFeedItem(
                     title = element.textAny("title").decodeHtmlEntities(),
                     link = link,
-                    content = element.firstText("description", "content:encoded", "encoded", "content", "summary").decodeHtmlEntities(),
+                    content = element.firstText("content:encoded", "encoded", "content", "description", "summary").decodeHtmlEntities(),
                     timeAgo = formatFeedDate(element.firstText("pubDate", "updated", "published", "dc:date")),
                     author = element.firstText("author", "dc:creator", "creator").ifBlank { "Author" },
                     id = element.firstText("guid", "id").ifBlank { link },
@@ -239,7 +240,7 @@ class RssParser(private val data: ByteArray) {
                     ParsedFeedItem(
                         title = block.tagText("title").decodeHtmlEntities(),
                         link = link,
-                        content = block.tagText("description", "content:encoded", "encoded", "content", "summary").decodeHtmlEntities(),
+                        content = block.tagText("content:encoded", "encoded", "content", "description", "summary").decodeHtmlEntities(),
                         timeAgo = formatFeedDate(block.tagText("pubDate", "updated", "published", "dc:date")),
                         author = block.tagText("author", "dc:creator", "creator").ifBlank { "Author" },
                         id = block.tagText("guid", "id").ifBlank { link },
@@ -356,6 +357,73 @@ object RssContentCleaner {
         return processed.stripTags().decodeHtmlEntities()
             .replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n")
             .trim()
+    }
+}
+
+object RssArticleExtractor {
+    fun extract(html: String, pageUrl: String): String {
+        val normalized = html
+            .replace(Regex("<!--.*?-->", setOf(RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<noscript[^>]*>[\\s\\S]*?</noscript>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<svg[^>]*>[\\s\\S]*?</svg>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<(nav|header|footer|aside|form)\\b[^>]*>[\\s\\S]*?</\\1>", RegexOption.IGNORE_CASE), "")
+
+        val candidates = buildList {
+            Regex("<article\\b[^>]*>([\\s\\S]*?)</article>", RegexOption.IGNORE_CASE)
+                .findAll(normalized)
+                .forEach { add(it.groupValues[1]) }
+            Regex("<main\\b[^>]*>([\\s\\S]*?)</main>", RegexOption.IGNORE_CASE)
+                .findAll(normalized)
+                .forEach { add(it.groupValues[1]) }
+            Regex(
+                """<([a-z0-9]+)\b[^>]*(?:role=["']main["']|class=["'][^"']*(?:post-content|entry-content|article-content|article-body|story-body|post-body|content-body|markdown-body|rich-text|prose)[^"']*["'])[^>]*>([\s\S]*?)</\1>""",
+                RegexOption.IGNORE_CASE,
+            ).findAll(normalized).forEach { add(it.groupValues[2]) }
+            bodyHtml(normalized)?.let(::add)
+        }
+
+        return candidates
+            .map { RssContentCleaner.clean(absolutizeUrls(it, pageUrl)) }
+            .filter { it.length >= 80 }
+            .maxByOrNull { textScore(it) }
+            .orEmpty()
+    }
+
+    fun isMeaningfullyMoreComplete(summary: String, article: String): Boolean {
+        val current = summary.trim()
+        val expanded = article.trim()
+        if (expanded.isBlank() || expanded == current) return false
+        if (current.isBlank()) return true
+        val minimumGain = if (current.length < 280) 80 else current.length
+        return expanded.length >= current.length + minimumGain
+    }
+
+    private fun bodyHtml(html: String): String? =
+        Regex("<body\\b[^>]*>([\\s\\S]*?)</body>", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.get(1)
+            ?: html.takeIf { it.contains("<html", ignoreCase = true) }
+
+    private fun textScore(text: String): Int =
+        text.length + Regex("""\n\s*\n""").findAll(text).count() * 120
+
+    private fun absolutizeUrls(html: String, pageUrl: String): String {
+        if (pageUrl.isBlank()) return html
+        val base = runCatching { URI(pageUrl) }.getOrNull() ?: return html
+        return Regex("""\b(src|href)=["']([^"']+)["']""", RegexOption.IGNORE_CASE).replace(html) { match ->
+            val attribute = match.groupValues[1]
+            val value = match.groupValues[2]
+            val absolute = when {
+                value.startsWith("http://", ignoreCase = true) || value.startsWith("https://", ignoreCase = true) -> value
+                value.startsWith("//") -> "${base.scheme ?: "https"}:$value"
+                value.startsWith("#") || value.startsWith("mailto:", ignoreCase = true) || value.startsWith("javascript:", ignoreCase = true) -> value
+                else -> runCatching { base.resolve(value).toString() }.getOrDefault(value)
+            }
+            "$attribute=\"$absolute\""
+        }
     }
 }
 
