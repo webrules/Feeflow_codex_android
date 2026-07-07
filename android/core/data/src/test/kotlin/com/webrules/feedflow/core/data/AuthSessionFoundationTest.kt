@@ -53,8 +53,26 @@ class AuthSessionFoundationTest {
         assertEquals(now + 30L * 24 * 60 * 60 * 1000, success.cookies.single().expiresAtMillis)
         assertTrue(coordinator.restoreSession(ForumSite.Zhihu))
         assertNull(store.getCachedTopics("zhihu_hot_page1"))
-        assertTrue(store.getCommunities(ForumSite.Zhihu.serviceId).isEmpty())
+        assertEquals("guest", store.getCommunities(ForumSite.Zhihu.serviceId).single().id)
         assertEquals("v2ex", store.getCachedTopics("v2ex_hot_page1")?.single()?.id)
+    }
+
+    @Test fun capturedFourD4YSidReplacesStaleSessionArtifacts() {
+        val store = InMemoryFeedflowStore(clockMillis = { now })
+        store.saveSetting("4d4y_sid", "staleSID")
+        store.saveSetting("detected_4d4y_username", "old-user")
+        val coordinator = AuthSessionCoordinator(store, nowMillis = { now })
+
+        assertIs<LoginCaptureResult.Success>(
+            coordinator.captureHeaderSession(ForumSite.FourD4Y, "cdb_auth=fresh-auth"),
+        )
+        assertNull(store.getSetting("4d4y_sid"))
+        assertNull(store.getSetting("detected_4d4y_username"))
+
+        coordinator.rememberFourD4YSid("freshSID123")
+        assertEquals("freshSID123", store.getSetting("4d4y_sid"))
+        coordinator.rememberFourD4YSid("bad sid")
+        assertEquals("freshSID123", store.getSetting("4d4y_sid"))
     }
 
     @Test fun logoutClearsOnlySelectedSiteAndLegacyCredentials() {

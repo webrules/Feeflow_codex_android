@@ -9,6 +9,7 @@ import com.webrules.feedflow.core.network.FeedflowCookie
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.nio.charset.Charset
@@ -181,7 +182,7 @@ class RssParser(private val data: ByteArray) {
                 ParsedFeedItem(
                     title = element.textAny("title").decodeHtmlEntities(),
                     link = link,
-                    content = element.firstText("description", "content:encoded", "encoded", "content", "summary").decodeHtmlEntities(),
+                    content = element.firstText("content:encoded", "encoded", "content", "description", "summary").decodeHtmlEntities(),
                     timeAgo = formatFeedDate(element.firstText("pubDate", "updated", "published", "dc:date")),
                     author = element.firstText("author", "dc:creator", "creator").ifBlank { "Author" },
                     id = element.firstText("guid", "id").ifBlank { link },
@@ -239,7 +240,7 @@ class RssParser(private val data: ByteArray) {
                     ParsedFeedItem(
                         title = block.tagText("title").decodeHtmlEntities(),
                         link = link,
-                        content = block.tagText("description", "content:encoded", "encoded", "content", "summary").decodeHtmlEntities(),
+                        content = block.tagText("content:encoded", "encoded", "content", "description", "summary").decodeHtmlEntities(),
                         timeAgo = formatFeedDate(block.tagText("pubDate", "updated", "published", "dc:date")),
                         author = block.tagText("author", "dc:creator", "creator").ifBlank { "Author" },
                         id = block.tagText("guid", "id").ifBlank { link },
@@ -277,8 +278,8 @@ class RssParser(private val data: ByteArray) {
         }.orEmpty()
 
     private fun String.stripCdata(): String =
-        replace(Regex("""^\s*<!\[CDATA\[""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\]\]>\s*$"""), "")
+        replace(Regex("""<!\[CDATA\[""", RegexOption.IGNORE_CASE), "")
+            .replace("]]>", "")
 
     private fun String.atomLinkText(): String {
         Regex("""<link\b([^>]*)/?>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
@@ -337,25 +338,120 @@ object RssContentCleaner {
             .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
         processed = Regex("<img[^>]+src=[\"']([^\"'>]+)[\"'][^>]*>", RegexOption.IGNORE_CASE)
             .replace(processed) { "\n[IMAGE:${it.groupValues[1]}]\n" }
+        processed = Regex("<h([1-6])\\b[^>]*>([\\s\\S]*?)</h\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) { match ->
+                val level = match.groupValues[1].toIntOrNull()?.coerceIn(1, 6) ?: 2
+                "\n\n${"#".repeat(level)} ${match.groupValues[2].stripHtmlInline()}\n\n"
+            }
+        processed = Regex("<blockquote\\b[^>]*>([\\s\\S]*?)</blockquote>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) { match ->
+                val quote = clean(match.groupValues[1])
+                    .lineSequence()
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
+                if (quote.isBlank()) "" else "\n\n[QUOTE]$quote[/QUOTE]\n\n"
+            }
+        processed = Regex("<li\\b[^>]*>([\\s\\S]*?)</li>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .replace(processed) { "\n• ${it.groupValues[1].stripHtmlInline()}" }
         processed = processed
-            .replace("<br />", "\n")
-            .replace("<br>", "\n")
-            .replace("</p>", "\n\n")
-            .replace("<p>", "")
-            .replace("</div>", "\n")
+            .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("</(p|div|section|article|main|tr|table|ul|ol)>", RegexOption.IGNORE_CASE), "\n\n")
+            .replace(Regex("<(p|div|section|article|main|tr|table|ul|ol)\\b[^>]*>", RegexOption.IGNORE_CASE), "\n")
         processed = Regex("<a[^>]+href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .replace(processed) {
                 val href = it.groupValues[1]
                 if (href.startsWith("#") || href.startsWith("javascript:", ignoreCase = true)) {
-                    it.groupValues[2].stripTags()
+                    it.groupValues[2].stripHtmlInline()
                 } else {
-                    val title = it.groupValues[2].stripTags().ifBlank { href }
+                    val title = it.groupValues[2].stripHtmlInline().ifBlank { href }
                     "[LINK:$href|$title]"
                 }
             }
-        return processed.stripTags().decodeHtmlEntities()
+        return processed
+            .replace(Regex("<[^>]+>"), "")
+            .decodeHtmlEntities()
+            .replace("\u00A0", " ")
+            .lineSequence()
+            .map { line -> line.trim().replace(Regex("[ \\t]{2,}"), " ") }
+            .joinToString("\n")
             .replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n")
             .trim()
+    }
+
+    private fun String.stripHtmlInline(): String =
+        replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("<[^>]+>"), "")
+            .decodeHtmlEntities()
+            .replace("\u00A0", " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+}
+
+object RssArticleExtractor {
+    fun extract(html: String, pageUrl: String): String {
+        val normalized = html
+            .replace(Regex("<!--.*?-->", setOf(RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<noscript[^>]*>[\\s\\S]*?</noscript>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<svg[^>]*>[\\s\\S]*?</svg>", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("<(nav|header|footer|aside|form)\\b[^>]*>[\\s\\S]*?</\\1>", RegexOption.IGNORE_CASE), "")
+
+        val candidates = buildList {
+            Regex("<article\\b[^>]*>([\\s\\S]*?)</article>", RegexOption.IGNORE_CASE)
+                .findAll(normalized)
+                .forEach { add(it.groupValues[1]) }
+            Regex("<main\\b[^>]*>([\\s\\S]*?)</main>", RegexOption.IGNORE_CASE)
+                .findAll(normalized)
+                .forEach { add(it.groupValues[1]) }
+            Regex(
+                """<([a-z0-9]+)\b[^>]*(?:role=["']main["']|class=["'][^"']*(?:post-content|entry-content|article-content|article-body|story-body|post-body|content-body|markdown-body|rich-text|prose)[^"']*["'])[^>]*>([\s\S]*?)</\1>""",
+                RegexOption.IGNORE_CASE,
+            ).findAll(normalized).forEach { add(it.groupValues[2]) }
+            bodyHtml(normalized)?.let(::add)
+        }
+
+        return candidates
+            .map { RssContentCleaner.clean(absolutizeUrls(it, pageUrl)) }
+            .filter { it.length >= 80 }
+            .maxByOrNull { textScore(it) }
+            .orEmpty()
+    }
+
+    fun isMeaningfullyMoreComplete(summary: String, article: String): Boolean {
+        val current = summary.trim()
+        val expanded = article.trim()
+        if (expanded.isBlank() || expanded == current) return false
+        if (current.isBlank()) return true
+        val minimumGain = if (current.length < 280) 80 else current.length
+        return expanded.length >= current.length + minimumGain
+    }
+
+    private fun bodyHtml(html: String): String? =
+        Regex("<body\\b[^>]*>([\\s\\S]*?)</body>", RegexOption.IGNORE_CASE)
+            .find(html)
+            ?.groupValues
+            ?.get(1)
+            ?: html.takeIf { it.contains("<html", ignoreCase = true) }
+
+    private fun textScore(text: String): Int =
+        text.length + Regex("""\n\s*\n""").findAll(text).count() * 120
+
+    private fun absolutizeUrls(html: String, pageUrl: String): String {
+        if (pageUrl.isBlank()) return html
+        val base = runCatching { URI(pageUrl) }.getOrNull() ?: return html
+        return Regex("""\b(src|href)=["']([^"']+)["']""", RegexOption.IGNORE_CASE).replace(html) { match ->
+            val attribute = match.groupValues[1]
+            val value = match.groupValues[2]
+            val absolute = when {
+                value.startsWith("http://", ignoreCase = true) || value.startsWith("https://", ignoreCase = true) -> value
+                value.startsWith("//") -> "${base.scheme ?: "https"}:$value"
+                value.startsWith("#") || value.startsWith("mailto:", ignoreCase = true) || value.startsWith("javascript:", ignoreCase = true) -> value
+                else -> runCatching { base.resolve(value).toString() }.getOrDefault(value)
+            }
+            "$attribute=\"$absolute\""
+        }
     }
 }
 
@@ -715,6 +811,7 @@ object HackerNewsContentCleaner {
                 val value = raw.decodeHtmlEntities().trim()
                 return when {
                     value.startsWith("//") -> "https:$value"
+                    value.startsWith("http://", ignoreCase = true) -> "https://${value.substringAfter("://")}"
                     value.startsWith("http") -> value
                     value.startsWith("/") -> "https://www.4d4y.com$value"
                     value.startsWith("uc_server/") -> "https://www.4d4y.com/$value"
@@ -846,8 +943,21 @@ object HackerNewsContentCleaner {
         }
     }
 
-    data class V2exTopic(val id: String, val title: String, val author: String, val replies: Int)
-    data class V2exReply(val id: String, val author: String, val content: String, val timeAgo: String)
+    data class V2exTopic(
+        val id: String,
+        val title: String,
+        val author: String,
+        val avatar: String,
+        val replies: Int,
+    )
+
+    data class V2exReply(
+        val id: String,
+        val author: String,
+        val avatar: String,
+        val content: String,
+        val timeAgo: String,
+    )
 
     object V2exParser {
         val tabs = listOf("tech", "creative", "play", "apple", "jobs", "deals", "city", "qna", "hot", "all", "r2", "xna", "planet")
@@ -870,17 +980,19 @@ object HackerNewsContentCleaner {
                     val topic = Regex("""<a href=["']/t/(\d+)[^"']*["'] class=["']topic-link["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(cell)
                         ?: return@mapNotNull null
                     val author = Regex("""href=["']/member/([^"']+)["']""", RegexOption.IGNORE_CASE).find(cell)?.groupValues?.get(1).orEmpty()
+                    val avatar = extractAvatar(cell)
                     val replies = Regex("""class=["']count_livid["']>(\d+)</a>""", RegexOption.IGNORE_CASE).find(cell)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                    V2exTopic(topic.groupValues[1], topic.groupValues[2].stripTags().decodeHtmlEntities(), author, replies)
+                    V2exTopic(topic.groupValues[1], topic.groupValues[2].stripTags().decodeHtmlEntities(), author, avatar, replies)
                 }
 
         fun parseReplies(html: String): List<V2exReply> =
             html.split(Regex("""id=["']r_""", RegexOption.IGNORE_CASE)).drop(1).mapNotNull { block ->
                 val id = Regex("""^(\d+)""").find(block)?.groupValues?.get(1) ?: return@mapNotNull null
                 val author = Regex("""class=["']dark["'][^>]*>([^<]+)</a>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty()
+                val avatar = extractAvatar(block)
                 val content = Regex("""class=["']reply_content["'][^>]*>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1)?.let(::cleanContent).orEmpty()
                 val time = Regex("""class=["']ago["'][^>]*>([^<]+)</span>""", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty()
-                V2exReply(id, author.decodeHtmlEntities(), content, time)
+                V2exReply(id, author.decodeHtmlEntities(), avatar, content, time)
             }
 
         fun parseTopicTitle(html: String): String =
@@ -896,6 +1008,17 @@ object HackerNewsContentCleaner {
         fun parseTopicAuthor(html: String): String =
             Regex("""href=["']/member/([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1).orEmpty()
 
+        fun parseTopicAvatar(html: String, author: String): String {
+            if (author.isNotBlank()) {
+                val authorBlock = Regex(
+                    """<a[^>]+href=["']/member/${Regex.escape(author)}["'][^>]*>\s*(<img[^>]+>)""",
+                    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+                ).find(html)?.groupValues?.get(1)
+                extractAvatar(authorBlock.orEmpty()).takeIf { it.isNotBlank() }?.let { return it }
+            }
+            return extractAvatar(html)
+        }
+
         fun cleanContent(html: String): String =
             Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE)
                 .replace(html) { "\n[IMAGE:${normalizeUrl(it.groupValues[1])}]\n" }
@@ -908,6 +1031,19 @@ object HackerNewsContentCleaner {
             url.startsWith("//") -> "https:$url"
             url.startsWith("/") -> "https://v2ex.com$url"
             else -> url
+        }
+
+        private fun extractAvatar(html: String): String {
+            val tag = Regex(
+                """<img\b(?=[^>]*class=["'][^"']*\bavatar\b[^"']*["'])[^>]*>""",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+            ).find(html)?.value ?: return ""
+            val raw = Regex("""(?:src|data-src)=["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                .find(tag)
+                ?.groupValues
+                ?.get(1)
+                ?: return ""
+            return normalizeUrl(raw.decodeHtmlEntities())
         }
     }
 

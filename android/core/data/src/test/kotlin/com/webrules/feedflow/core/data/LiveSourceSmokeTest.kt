@@ -33,7 +33,10 @@ class LiveSourceSmokeTest {
 
         assertTrue(threads.isNotEmpty(), "Default RSS feed returned no items")
         assertTrue(threads.first().title.isNotBlank(), "First RSS item has no title")
-        assertEquals(threads.first().id, service.fetchThreadDetail(threads.first().id, page = 1).thread.id)
+        val detail = service.fetchThreadDetail(threads.first().id, page = 1).thread
+        assertEquals(threads.first().id, detail.id)
+        assertTrue(detail.title != "Content Unavailable", "RSS detail fell back to a placeholder")
+        assertTrue(detail.content.isNotBlank(), "RSS detail has no article content")
     }
 
     @Test
@@ -60,9 +63,14 @@ class LiveSourceSmokeTest {
         val threads = service.fetchCategoryThreads(category.id, categories, page = 1)
 
         assertTrue(threads.isNotEmpty(), "V2EX tech tab returned no items")
+        assertTrue(threads.first().author.avatar.startsWith("https://"), "V2EX list avatar was not parsed")
         val detail = service.fetchThreadDetail(threads.first().id, page = 1)
         assertEquals(threads.first().id, detail.thread.id)
         assertTrue(detail.thread.title.isNotBlank(), "V2EX detail has no title")
+        assertTrue(detail.thread.author.avatar.startsWith("https://"), "V2EX topic avatar was not parsed")
+        detail.comments.firstOrNull()?.let { comment ->
+            assertTrue(comment.author.avatar.startsWith("https://"), "V2EX reply avatar was not parsed")
+        }
     }
 
     @Test

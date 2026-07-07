@@ -8,6 +8,7 @@ import com.webrules.feedflow.core.data.SiteLoginConfig
 import com.webrules.feedflow.core.data.WebCookieHeaderParser
 import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.network.FeedflowCookie
+import java.net.URI
 
 class AndroidWebLoginCookieBridge(
     private val cookieManager: CookieManager = CookieManager.getInstance(),
@@ -23,19 +24,26 @@ class AndroidWebLoginCookieBridge(
     }
 
     fun cookiesFor(config: SiteLoginConfig, currentUrl: String?): List<FeedflowCookie> {
-        val urls = linkedSetOf(
-            config.loginUrl,
-            "https://${config.cookieDomain}/",
-            "https://www.${config.cookieDomain}/",
-        )
-        currentUrl?.takeIf { config.shouldCheckCookies(it) }?.let(urls::add)
+        val authenticatedPageUrl = currentUrl?.takeIf { config.shouldCheckCookies(it) }
+        val urls = linkedSetOf<String>()
+        authenticatedPageUrl?.let(urls::add)
+        urls += "https://www.${config.cookieDomain}/"
+        urls += "https://${config.cookieDomain}/"
+        urls += config.loginUrl
         if (config.site == ForumSite.FourD4Y) {
             urls += "https://www.4d4y.com/forum/index.php"
             urls += "https://www.4d4y.com/forum/forumdisplay.php?fid=2"
         }
-        return urls.flatMap { url ->
-            WebCookieHeaderParser.parse(cookieManager.getCookie(url).orEmpty(), config.cookieDomain)
-        }.distinctBy { "${it.name}|${it.domain}|${it.path}" }
+        return urls.flatMap(::cookiesForUrl)
+            .distinctBy { "${it.name}|${it.domain}|${it.path}" }
+    }
+
+    private fun cookiesForUrl(url: String): List<FeedflowCookie> {
+        val host = runCatching { URI(url).host }.getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return emptyList()
+        return WebCookieHeaderParser.parse(cookieManager.getCookie(url).orEmpty(), host)
     }
 
     fun capture(

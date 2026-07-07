@@ -7,6 +7,7 @@ import java.time.Duration
 
 sealed interface ContentBlock {
     data class Text(val segments: List<LinkSegment>) : ContentBlock
+    data class Heading(val level: Int, val segments: List<LinkSegment>) : ContentBlock
     data class Quote(val segments: List<LinkSegment>) : ContentBlock
     data class Image(val url: String, val normalizedKey: String) : ContentBlock
 }
@@ -50,6 +51,15 @@ object ThreadRowRenderingPolicy {
         value?.replace(Regex("""^\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*"""), "")?.ifBlank { null }
 }
 
+object ThreadDetailRenderingPolicy {
+    fun usesAccentLinkColor(site: ForumSite): Boolean =
+        site != ForumSite.Rss &&
+            site != ForumSite.HackerNews &&
+            site != ForumSite.V2ex &&
+            site != ForumSite.FourD4Y &&
+            site != ForumSite.Zhihu
+}
+
 object UrlBookmarkRelativeTime {
     fun format(age: Duration): String {
         val seconds = age.seconds.coerceAtLeast(0)
@@ -81,6 +91,7 @@ object FeedflowContentRenderer {
         return blocks.filterNot { block ->
             when (block) {
                 is ContentBlock.Text -> block.segments.onlyBlankPlainText()
+                is ContentBlock.Heading -> block.segments.onlyBlankPlainText()
                 is ContentBlock.Quote -> block.segments.onlyBlankPlainText()
                 is ContentBlock.Image -> false
             }
@@ -147,7 +158,20 @@ object FeedflowContentRenderer {
     }
 
     private fun addPlainBlock(text: String, blocks: MutableList<ContentBlock>) {
-        if (text.isNotBlank()) blocks += ContentBlock.Text(parseLinkedText(text.trim()))
+        if (text.isBlank()) return
+        val headingRegex = Regex("""(?m)^\s*(#{1,6})\s+(.+?)\s*$""")
+        var cursor = 0
+        headingRegex.findAll(text).forEach { match ->
+            val before = text.substring(cursor, match.range.first).trim()
+            if (before.isNotBlank()) blocks += ContentBlock.Text(parseLinkedText(before))
+            blocks += ContentBlock.Heading(
+                level = match.groupValues[1].length,
+                segments = parseLinkedText(match.groupValues[2].trim()),
+            )
+            cursor = match.range.last + 1
+        }
+        val remaining = text.substring(cursor).trim()
+        if (remaining.isNotBlank()) blocks += ContentBlock.Text(parseLinkedText(remaining))
     }
 
     private fun addRawUrlSegments(text: String, segments: MutableList<LinkSegment>) {

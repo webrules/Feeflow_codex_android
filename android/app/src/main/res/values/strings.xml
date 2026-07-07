@@ -87,6 +87,7 @@
     <string name="login_or">or</string>
     <string name="login_with_provider">Quick Sign In</string>
     <string name="login_success">Login Successful!</string>
+    <string name="login_verification_failed">The website login did not authenticate app requests. Please finish signing in and save again.</string>
     <string name="login_web_note">You will be redirected to the website to sign in. Your session cookies are saved locally for future use.</string>
     <string name="login_status">Status</string>
     <string name="signed_in">Signed in</string>

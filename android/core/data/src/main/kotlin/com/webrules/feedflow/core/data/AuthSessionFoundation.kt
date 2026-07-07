@@ -42,8 +42,11 @@ class AuthSessionCoordinator(
         }
 
         val upgraded = siteCookies.map { CookieMatcher.withThirtyDayExpiry(it, nowMillis()) }
+        if (site == ForumSite.FourD4Y) {
+            store.removeSetting("4d4y_sid")
+            store.removeSetting("detected_4d4y_username")
+        }
         store.replaceCookies(site.serviceId, upgraded)
-        store.saveCommunities(emptyList(), site.serviceId)
         store.clearCachedTopicsForService(site.serviceId)
         rejectedSignatures.remove(site)
         return LoginCaptureResult.Success(site, upgraded)
@@ -57,6 +60,11 @@ class AuthSessionCoordinator(
     fun restoreSession(site: ForumSite): Boolean {
         val config = SiteLoginConfig.forSite(site) ?: return false
         return config.hasAuthenticatedSession(store.getCookies(site.serviceId).orEmpty(), nowMillis())
+    }
+
+    fun rememberFourD4YSid(sid: String?) {
+        sid?.takeIf { it.matches(Regex("[A-Za-z0-9]+")) }
+            ?.let { store.saveSetting("4d4y_sid", it) }
     }
 
     fun logout(site: ForumSite) {

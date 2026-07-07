@@ -64,6 +64,14 @@ class FeedflowAppStateController(
 
     fun canDeleteThread(site: ForumSite, thread: FeedThread): Boolean = repository.canDeleteThread(site, thread)
 
+    suspend fun restoreSession(site: ForumSite): Boolean = repository.restoreSession(site)
+
+    fun sessionChanged(site: ForumSite) {
+        communityCache.remove(site)
+        threadCache.keys.filter { it.startsWith("${site.serviceId}:") }.forEach(threadCache::remove)
+        detailCache.keys.filter { it.startsWith("${site.serviceId}:") }.forEach(detailCache::remove)
+    }
+
     fun detail(site: ForumSite, thread: FeedThread): LoadableContent<ThreadDetailContent> =
         detailCache[detailKey(site, thread)] ?: LoadableContent.loaded(ThreadDetailContent(thread, emptyList()))
 

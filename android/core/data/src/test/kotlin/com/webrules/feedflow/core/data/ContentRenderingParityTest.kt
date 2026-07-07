@@ -47,6 +47,15 @@ class ContentRenderingParityTest {
         assertEquals("Example", single?.title)
     }
 
+    @Test fun hackerNewsAndV2exDetailsUseBodyColorForLinks() {
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.Rss))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.HackerNews))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.V2ex))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.FourD4Y))
+        assertFalse(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.Zhihu))
+        assertTrue(ThreadDetailRenderingPolicy.usesAccentLinkColor(ForumSite.LinuxDo))
+    }
+
     @Test fun parsedContentSplitsQuotesImagesAndDedupesZhihuVariants() {
         val blocks = FeedflowContentRenderer.parseBlocks(
             """
@@ -62,6 +71,28 @@ class ContentRenderingParityTest {
         val images = blocks.filterIsInstance<ContentBlock.Image>()
         assertEquals(2, images.size)
         assertEquals("https://cdn.example.com/a.png", images[1].url)
+    }
+
+    @Test fun parsedContentPromotesMarkdownHeadingsToHeadingBlocks() {
+        val blocks = FeedflowContentRenderer.parseBlocks(
+            """
+            Intro paragraph.
+
+            ## Article Section
+
+            Body paragraph.
+            • First bullet
+            • Second bullet
+            [QUOTE]quoted paragraph[/QUOTE]
+            """.trimIndent(),
+        )
+
+        assertIs<ContentBlock.Text>(blocks[0])
+        val heading = assertIs<ContentBlock.Heading>(blocks[1])
+        assertEquals(2, heading.level)
+        assertEquals("Article Section", (heading.segments.single() as LinkSegment.Plain).text)
+        assertIs<ContentBlock.Text>(blocks[2])
+        assertIs<ContentBlock.Quote>(blocks[3])
     }
 
     @Test fun urlBookmarkRelativeTimeMatchesIosThresholds() {

@@ -33,14 +33,12 @@ class FeedflowRepository(
     private val prefetchDelay: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val summaryCoordinator = AiSummaryCoordinator(store)
-    private var zhihuService: ForumService? = null
-    private val serviceFactory: (ForumSite) -> ForumService = serviceFactory ?: { site ->
-        if (site == ForumSite.Zhihu) {
-            synchronized(this) {
-                zhihuService ?: site.makeService(store, httpClient).also { zhihuService = it }
+    private val services = mutableMapOf<ForumSite, ForumService>()
+    private val serviceFactory: (ForumSite) -> ForumService = { site ->
+        synchronized(services) {
+            services.getOrPut(site) {
+                serviceFactory?.invoke(site) ?: site.makeService(store, httpClient)
             }
-        } else {
-            site.makeService(store, httpClient)
         }
     }
 
@@ -52,11 +50,21 @@ class FeedflowRepository(
     fun canDeleteThread(site: ForumSite, thread: FeedThread): Boolean =
         serviceFactory(site).canDeleteThread(thread)
 
+    suspend fun restoreSession(site: ForumSite): Boolean =
+        withContext(Dispatchers.IO) { serviceFactory(site).restoreSession() }
+
     suspend fun loadCommunities(site: ForumSite): CacheFirstResult<List<Community>> {
         val cached = store.getCommunities(site.serviceId).takeIf { it.isNotEmpty() }
         return runCatching {
-            withContext(Dispatchers.IO) {
+            val fetched = withContext(Dispatchers.IO) {
                 serviceFactory(site).fetchCategories()
+            }
+            if (site == ForumSite.FourD4Y && cached != null && fetched.size < cached.size) {
+                val fetchedById = fetched.associateBy { it.id }
+                cached.map { fetchedById[it.id] ?: it } +
+                    fetched.filter { fresh -> cached.none { it.id == fresh.id } }
+            } else {
+                fetched
             }.also { store.saveCommunities(it, site.serviceId) }
         }.fold(
             onSuccess = { CacheFirstResult(cached = cached, fresh = it) },

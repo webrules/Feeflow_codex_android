@@ -33,6 +33,7 @@ class SourceServiceWiringTest {
         val httpClient = SourceFixtureHttpClient(
             "https://www.v2ex.com/?tab=tech" to """
                 <div class="cell item">
+                  <a href="/member/alice"><img src="https://cdn.v2ex.com/avatar/alice.png" class="avatar"></a>
                   <a href="/t/123#reply1" class="topic-link">Android parity</a>
                   <a href="/member/alice">alice</a>
                   <a class="count_livid">8</a>
@@ -40,10 +41,11 @@ class SourceServiceWiringTest {
             """,
             "https://www.v2ex.com/t/123" to """
                 <h1>Android parity detail</h1>
+                <a href="/member/alice"><img src="//cdn.v2ex.com/avatar/alice-large.png" class="avatar"></a>
                 <a href="/member/alice">alice</a>
                 <input type="hidden" name="once" value="7788">
                 <div class="topic_content">Original<br>topic</div>
-                <div id="r_1"><a class="dark">bob</a><span class="ago">1 min ago</span><div class="reply_content">Hello<br>world</div></div>
+                <div id="r_1"><img class="avatar" src="//cdn.v2ex.com/avatar/bob.png"><a class="dark">bob</a><span class="ago">1 min ago</span><div class="reply_content">Hello<br>world</div></div>
             """,
         )
         val service = V2exService(
@@ -53,11 +55,14 @@ class SourceServiceWiringTest {
         assertTrue(service.fetchCategories().any { it.id == "tech" })
         val threads = service.fetchCategoryThreads("tech", listOf(Community("tech", "Tech", "", "V2EX", 0, 0)), 1)
         assertEquals("Android parity", threads.single().title)
+        assertEquals("https://cdn.v2ex.com/avatar/alice.png", threads.single().author.avatar)
         assertEquals(8, threads.single().commentCount)
         val detail = service.fetchThreadDetail("123", 1)
         assertEquals("Android parity detail", detail.thread.title)
+        assertEquals("https://cdn.v2ex.com/avatar/alice-large.png", detail.thread.author.avatar)
         assertTrue(detail.thread.content.contains("Original"))
         assertEquals("bob", detail.comments.single().author.username)
+        assertEquals("https://cdn.v2ex.com/avatar/bob.png", detail.comments.single().author.avatar)
         assertTrue(detail.comments.single().content.contains("Hello"))
         val secondPage = service.fetchThreadDetail("123", 2)
         assertEquals(2, secondPage.totalPages)
@@ -375,6 +380,57 @@ class SourceServiceWiringTest {
         assertEquals(12, threads.single().commentCount)
         assertEquals("2026-07-03 10:20", threads.single().lastPostTime)
         assertEquals("lastPoster", threads.single().lastPosterName)
+    }
+
+    @Test fun fourD4YFetchCategoriesProbesDiscoveryWhenAuthenticatedIndexOmitsIt() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "token", "4d4y.com", expiresAtMillis = null)))
+        store.saveSetting("4d4y_sid", "SID123")
+        val service = FourD4YService(
+            store = store,
+            httpClient = SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/index.php?sid=SID123" to """
+                    <html><body>
+                        <a href="forumdisplay.php?fid=7&amp;sid=SID123">Public</a>
+                        <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                    </body></html>
+                """,
+                "https://www.4d4y.com/forum/forumdisplay.php?fid=2&sid=SID123" to """
+                    <html><body>
+                        <title>Discovery - 4D4Y</title>
+                        <tbody id="normalthread_88"><a href="viewthread.php?tid=88">Protected topic</a></tbody>
+                    </body></html>
+                """,
+            ),
+        )
+
+        val categories = service.fetchCategories()
+
+        assertEquals(listOf("Public", "Discovery"), categories.map { it.name })
+    }
+
+    @Test fun fourD4YFetchCategoriesDoesNotAddDiscoveryWhenProbeShowsLoginPage() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("4d4y", listOf(FeedflowCookie("cdb_auth", "stale", "4d4y.com", expiresAtMillis = null)))
+        store.saveSetting("4d4y_sid", "SID123")
+        val service = FourD4YService(
+            store = store,
+            httpClient = SourceFixtureHttpClient(
+                "https://www.4d4y.com/forum/index.php?sid=SID123" to """
+                    <html><body>
+                        <a href="forumdisplay.php?fid=7&amp;sid=SID123">Public</a>
+                        <a href="logging.php?action=logout&amp;formhash=abc123">退出</a>
+                    </body></html>
+                """,
+                "https://www.4d4y.com/forum/forumdisplay.php?fid=2&sid=SID123" to """
+                    <html><body><a href="logging.php?action=login">登录</a> 未登录</body></html>
+                """,
+            ),
+        )
+
+        val categories = service.fetchCategories()
+
+        assertEquals(listOf("Public"), categories.map { it.name })
     }
 
     @Test fun fourD4YRestoreSessionStoresLoggedInUsernameForDeleteGating() = runBlocking {
