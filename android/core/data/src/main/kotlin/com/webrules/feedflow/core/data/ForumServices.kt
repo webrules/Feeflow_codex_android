@@ -595,7 +595,7 @@ class FourD4YService(
         if (html.contains("无权访问该版块") || html.contains("无权进行当前操作")) {
             throw FeedflowError.AuthRequired
         }
-        rememberLoggedInUsername(html)
+        rememberAuthenticatedPageArtifacts(html)
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
         return ThreadDetailResult(parsed.first, parsed.second, parsed.third)
@@ -706,10 +706,7 @@ class FourD4YService(
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        if (currentFormHash == null) {
-            val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId", cookies), cookies)
-            currentFormHash = extractFormHash(formHtml)
-        }
+        ensureFormHashForReply(topicId, categoryId, cookies)
         val formHash = currentFormHash ?: throw FeedflowError.Parsing(id, "replyFormhash", "no formhash available")
         val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId&extra=&replysubmit=yes&inajax=1", cookies),
@@ -733,11 +730,24 @@ class FourD4YService(
         ensureMutationSucceeded("postComment", response)
     }
 
+    private suspend fun ensureFormHashForReply(topicId: String, categoryId: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>) {
+        if (currentFormHash != null) return
+        rememberAuthenticatedPageArtifacts(fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies), cookies))
+        if (currentFormHash != null) return
+        rememberAuthenticatedPageArtifacts(fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies))
+        if (currentFormHash != null) return
+        val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId", cookies), cookies)
+        currentFormHash = extractFormHash(formHtml)
+    }
+
     override suspend fun createThread(categoryId: String, title: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
         val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies), cookies)
         currentFormHash = extractFormHash(formHtml)
+        if (currentFormHash == null) {
+            fetchCategories()
+        }
         val formHash = currentFormHash ?: throw FeedflowError.Parsing(id, "newThreadFormhash", formHtml.take(200))
         val typeField = extractFirstTypeId(formHtml)?.let { "&typeid=${it.gbkFormEncode()}" }.orEmpty()
         val response = httpClient.post(
