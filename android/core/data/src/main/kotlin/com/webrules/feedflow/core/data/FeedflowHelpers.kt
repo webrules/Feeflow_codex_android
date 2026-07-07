@@ -925,6 +925,10 @@ object HackerNewsContentCleaner {
 
         fun cleanContent(html: String): String {
             var processed = html
+                .replace(Regex("""<font\s+size=["']1["'][^>]*>\s*<a[^>]+href=["']https?://(?:www\.)?4d4y\.com/forum/viewthread\.php\?tid=\d+[^"']*["'][^>]*>[^<]*</a>\s*</font>""",
+                    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+                .replace(Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]+target=["']_blank["'][^>]*>\s*\d+#?\s*</a>""",
+                    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
                 .replace(Regex("""<div class=["']t_attach["'][\s\S]*?</div>""", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("""<ignore_js_op>[\s\S]*?</ignore_js_op>""", RegexOption.IGNORE_CASE), "")
             processed = Regex("""<blockquote[^>]*>([\s\S]*?)</blockquote>""", RegexOption.IGNORE_CASE)
