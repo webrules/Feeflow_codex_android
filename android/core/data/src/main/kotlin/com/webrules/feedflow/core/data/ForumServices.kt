@@ -453,9 +453,25 @@ class DiscourseService(
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
-        val json = httpClient.get("https://linux.do/t/$threadId.json?page=$page", store?.getCookies(id).orEmpty())
-        val (thread, comments, totalPages) = DiscourseParser.parseThreadDetail(json, threadId)
-        return ThreadDetailResult(thread, comments, totalPages)
+        val cookies = store?.getCookies(id).orEmpty()
+        val json = httpClient.get("https://linux.do/t/$threadId.json?page=$page", cookies)
+        val root = ZhihuJson.parse(json)?.obj() ?: throw FeedflowError.Parsing(id, "threadDetail", json.take(200))
+        val initialPosts = DiscourseParser.parsePosts(root)
+        val firstPost = initialPosts.firstOrNull() ?: throw FeedflowError.Parsing(id, "threadDetail", json.take(200))
+        val streamIds = DiscourseParser.parseStreamIds(root).ifEmpty { initialPosts.mapNotNull { it.id.toIntOrNull() } }
+        val requestedIds = DiscourseParser.postIdsForPage(streamIds, page)
+        val postsById = initialPosts.associateBy { it.id }.toMutableMap()
+        requestedIds.map { it.toString() }.filterNot(postsById::containsKey).forEach { postId ->
+            val postJson = runCatching { httpClient.get("https://linux.do/posts/$postId.json", cookies) }.getOrNull()
+                ?: return@forEach
+            DiscourseParser.parsePost(ZhihuJson.parse(postJson)?.obj())?.let { postsById[it.id] = it }
+        }
+        val ordered = requestedIds.mapNotNull { postsById[it.toString()] }
+        val opPost = if (page <= 1) ordered.firstOrNull() ?: firstPost else firstPost
+        val comments = if (page <= 1) ordered.filter { it.id != opPost.id } else ordered
+        val commentCount = maxOf(streamIds.size - 1, initialPosts.size - 1).coerceAtLeast(0)
+        val thread = DiscourseParser.buildDetailThread(root, threadId, opPost, commentCount)
+        return ThreadDetailResult(thread, comments, DiscourseParser.totalPages(streamIds))
     }
 
     override suspend fun createThread(categoryId: String, title: String, content: String) {

@@ -473,6 +473,31 @@ class RemainingSourceParserParityTest {
         assertTrue(cleaned.contains("[IMAGE:https://linux.do/uploads/a.png]"))
         assertTrue(cleaned.contains("🙂"))
     }
+
+    @Test fun discourseParserParsesPostWithScoreAsLikeCount() {
+        val json = """{"id":55,"user_id":100,"username":"alice","avatar_template":"/user_avatar/linux.do/alice/{size}/1.png","cooked":"<p>Reply body</p>","created_at":"2026-07-03T12:00:00Z","score":12.5}"""
+        val obj = com.webrules.feedflow.core.data.ZhihuJson.parse(json)?.obj()
+        val post = DiscourseParser.parsePost(obj)
+        assertEquals("55", post!!.id)
+        assertEquals("alice", post.author.username)
+        assertEquals(12, post.likeCount)
+    }
+
+    @Test fun discourseParserPaginationHelpers() {
+        val stream = (1..42).toList()
+        assertEquals(21, DiscourseParser.postIdsForPage(stream, 1).size)
+        assertEquals(1, DiscourseParser.postIdsForPage(stream, 1).first())
+        assertEquals(21, DiscourseParser.postIdsForPage(stream, 1).last())
+        val p2 = DiscourseParser.postIdsForPage(stream, 2)
+        assertEquals(20, p2.size)
+        assertEquals(22, p2.first())
+        assertEquals(41, p2.last())
+        val p3 = DiscourseParser.postIdsForPage(stream, 3)
+        assertEquals(1, p3.size)
+        assertEquals(42, p3.first())
+        assertEquals(3, DiscourseParser.totalPages(stream))
+        assertEquals(1, DiscourseParser.totalPages(listOf(1, 2, 3)))
+    }
 }
 
 class PerSiteServiceParityTest {

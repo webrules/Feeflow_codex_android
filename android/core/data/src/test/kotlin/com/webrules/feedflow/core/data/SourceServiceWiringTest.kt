@@ -129,6 +129,34 @@ class SourceServiceWiringTest {
         assertEquals("_t=token", httpClient.lastCookieHeader)
     }
 
+    @Test fun discourseServicePaginationFromStream() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("linux_do", listOf(FeedflowCookie("_t", "token", "linux.do", expiresAtMillis = null)))
+        val httpClient = SourceFixtureHttpClient(
+            "https://linux.do/session/current.json" to """{"current_user":{"id":1,"username":"alice"}}""",
+            "https://linux.do/t/99.json?page=1" to """
+                {"title":"Paginated thread","category_id":5,"posts_count":23,"post_stream":{
+                  "stream":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23],
+                  "posts":[
+                    {"id":1,"username":"alice","avatar_template":"/user_avatar/linux.do/alice/{size}/1.png","cooked":"<p>Original post</p>","created_at":"2026-07-03T12:00:00Z","score":5},
+                    {"id":2,"username":"bob","avatar_template":"/user_avatar/linux.do/bob/{size}/1.png","cooked":"<p>Reply 1</p>","created_at":"2026-07-03T12:01:00Z","score":3},
+                    {"id":3,"username":"carol","avatar_template":"/user_avatar/linux.do/carol/{size}/1.png","cooked":"<p>Reply 2</p>","created_at":"2026-07-03T12:02:00Z","score":7}
+                  ]
+                }}
+            """.trimIndent(),
+        )
+        val service = DiscourseService(store = store, httpClient = httpClient)
+        val detail = service.fetchThreadDetail("99", 1)
+        assertEquals("Paginated thread", detail.thread.title)
+        assertEquals(22, detail.thread.commentCount)
+        assertEquals(2, detail.totalPages)
+        assertEquals(2, detail.comments.size)
+        assertEquals("bob", detail.comments[0].author.username)
+        assertEquals("carol", detail.comments[1].author.username)
+        assertEquals(3, detail.comments[0].likeCount)
+        assertEquals(7, detail.comments[1].likeCount)
+    }
+
     @Test fun fourD4YServiceUsesDiscuzCategoriesAndThreadRows() = runBlocking {
         val store = InMemoryFeedflowStore()
         store.saveCookies("4d4y", listOf(

@@ -1295,8 +1295,41 @@ object HackerNewsContentCleaner {
             }
         }
 
-        fun parseThreadDetail(json: String, threadId: String): Triple<FeedThread, List<Comment>, Int?> {
-            val root = ZhihuJson.parse(json)?.obj()
+        const val THREAD_PAGE_SIZE = 20
+
+        fun parsePost(post: JsonObject?): Comment? {
+            post ?: return null
+            val username = post.str("username") ?: "anonymous"
+            val avatar = post.str("avatar_template")?.let { resolveAvatar(it) } ?: "person.circle"
+            return Comment(
+                id = post.int("id")?.toString() ?: return null,
+                author = User(post.int("user_id")?.toString() ?: username, username, avatar),
+                content = cleanCooked(post.str("cooked").orEmpty()),
+                timeAgo = relativeTime(post.str("created_at")),
+                likeCount = post.int("score") ?: 0,
+            )
+        }
+
+        fun parsePosts(root: JsonObject?): List<Comment> =
+            root.obj("post_stream").arr("posts").orEmpty().mapNotNull { parsePost(it.obj()) }
+
+        fun parseStreamIds(root: JsonObject?): List<Int> =
+            root.obj("post_stream").arr("stream").orEmpty()
+                .mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.toIntOrNull() }
+
+        fun postIdsForPage(streamIds: List<Int>, page: Int): List<Int> {
+            if (streamIds.isEmpty()) return emptyList()
+            if (page <= 1) return streamIds.take(THREAD_PAGE_SIZE + 1)
+            val startIndex = ((page - 1) * THREAD_PAGE_SIZE).coerceAtLeast(0)
+            return streamIds.drop(1).drop(startIndex).take(THREAD_PAGE_SIZE)
+        }
+
+        fun totalPages(streamIds: List<Int>): Int {
+            val replies = (streamIds.size - 1).coerceAtLeast(0)
+            return maxOf(1, (replies + THREAD_PAGE_SIZE - 1) / THREAD_PAGE_SIZE)
+        }
+
+        fun buildDetailThread(root: JsonObject?, threadId: String, firstPost: Comment?, commentCount: Int): FeedThread {
             val title = (root.str("title") ?: "Linux.do").decodeHtmlEntities()
             val categoryId = root.int("category_id")?.toString().orEmpty()
             val community = Community(
@@ -1307,21 +1340,10 @@ object HackerNewsContentCleaner {
                 0,
                 0,
             )
-            val posts = root.obj("post_stream").arr("posts").orEmpty().mapNotNull { element ->
-                val post = element.obj() ?: return@mapNotNull null
-                val username = post.str("username") ?: "anonymous"
-                val avatar = post.str("avatar_template")?.let { resolveAvatar(it) } ?: "person.circle"
-                Comment(
-                    id = post.int("id")?.toString() ?: return@mapNotNull null,
-                    author = User(post.int("user_id")?.toString() ?: username, username, avatar),
-                    content = cleanCooked(post.str("cooked").orEmpty()),
-                    timeAgo = relativeTime(post.str("created_at")),
-                    likeCount = post.int("reply_count") ?: 0,
-                )
-            }
-            val firstPost = posts.firstOrNull()
-            val postsCount = root.int("posts_count") ?: posts.size
-            val thread = FeedThread(
+            val tags = root.arr("tags")
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                ?.takeIf { it.isNotEmpty() }
+            return FeedThread(
                 id = threadId,
                 title = title,
                 content = firstPost?.content.orEmpty(),
@@ -1329,10 +1351,9 @@ object HackerNewsContentCleaner {
                 community = community,
                 timeAgo = firstPost?.timeAgo.orEmpty(),
                 likeCount = firstPost?.likeCount ?: 0,
-                commentCount = (postsCount - 1).coerceAtLeast(0),
+                commentCount = commentCount,
+                tags = tags,
             )
-            val totalPages = null
-            return Triple(thread, posts.drop(1), totalPages)
         }
 
         fun parseSearch(json: String): SearchResult {

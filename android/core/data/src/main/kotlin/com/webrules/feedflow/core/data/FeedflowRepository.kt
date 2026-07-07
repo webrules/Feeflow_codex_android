@@ -115,7 +115,7 @@ class FeedflowRepository(
             }.let { it.comments to it.totalPages }
         }.getOrDefault(emptyList<Comment>() to null)
 
-    fun supportsCommentPagination(site: ForumSite): Boolean = site == ForumSite.FourD4Y
+    fun supportsCommentPagination(site: ForumSite): Boolean = site == ForumSite.FourD4Y || site == ForumSite.LinuxDo
 
     fun isThreadDetailCached(site: ForumSite, thread: FeedThread): Boolean =
         store.getCachedThread(thread.id, site.serviceId) != null
