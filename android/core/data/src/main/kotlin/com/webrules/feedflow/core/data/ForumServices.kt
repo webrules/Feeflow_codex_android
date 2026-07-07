@@ -933,11 +933,15 @@ class FourD4YService(
                     """<div[^>]*class=["'][^"']*replycon[^"']*["'][^>]*>(.*)</div>\s*$""",
                     options,
                 ).find(block)?.groupValues?.get(1) ?: return@mapNotNull null
+                val timeAgo = extractWapReplyPostTime(top)
+                val position = Regex("""<span[^>]*>\s*(\d+)#?\s*</span>""", RegexOption.IGNORE_CASE)
+                    .find(top)?.groupValues?.get(1)
+                val displayTime = if (position != null && timeAgo.isNotBlank()) "# · " else timeAgo
                 FourD4YDetailPost(
                     id = match.groupValues[1],
                     author = extractWapAuthor(top),
                     rawContent = content,
-                    timeAgo = extractWapReplyPostTime(top),
+                    timeAgo = displayTime,
                 )
             }
             .toList()
@@ -989,18 +993,42 @@ class FourD4YService(
 
     private fun extractDesktopThreadDetailPosts(html: String): List<FourD4YDetailPost> {
         val authors = extractDesktopPostAuthors(html)
+        val postPositions = extractDesktopPostPositions(html)
+        val postTimes = extractDesktopPostTimes(html)
         return postContentMatches(html).mapIndexedNotNull { index, match ->
             val pid = match.groupValues.getOrNull(1).orEmpty()
             val content = match.groupValues.getOrNull(2).orEmpty()
             if (pid.isBlank() || content.isBlank()) return@mapIndexedNotNull null
+            val position = postPositions.getOrNull(index)
+            val time = postTimes.getOrNull(index).orEmpty()
+            val displayTime = buildString {
+                if (position != null) append("#")
+                if (time.isNotBlank()) {
+                    if (position != null) append(" · ")
+                    append(time)
+                }
+            }
             FourD4YDetailPost(
                 id = pid,
                 author = authors.getOrElse(index) { User("0", "User", "person.circle") },
                 rawContent = content,
-                timeAgo = "",
+                timeAgo = displayTime,
             )
         }
     }
+
+    private fun extractDesktopPostPositions(html: String): List<Int> =
+        Regex("""<em>(\d+)</em>\s*<sup>#</sup>""", RegexOption.IGNORE_CASE)
+            .findAll(html)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }
+            .toList()
+
+    private fun extractDesktopPostTimes(html: String): List<String> =
+        Regex("""<em[^>]*id=["']authorposton\d+["'][^>]*>\s*(?:发表于\s*)?([^<]+)</em>""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .findAll(html)
+            .map { it.groupValues[1].trim() }
+            .toList()
 
     private fun postContentMatches(html: String): List<MatchResult> {
         val options = setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
