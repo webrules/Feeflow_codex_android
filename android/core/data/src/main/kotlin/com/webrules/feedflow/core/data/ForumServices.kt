@@ -404,8 +404,10 @@ private fun String.formEncode(): String = URLEncoder.encode(this, StandardCharse
 
 private fun String.gbkFormEncode(): String = FourD4YParser.encodeFormValue(this)
 
+private const val FOURD4Y_MOBILE_UA = "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+
 internal val FOURD4Y_HEADERS = mapOf(
-    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+    "User-Agent" to FOURD4Y_MOBILE_UA,
     "Cache-Control" to "no-cache",
     "Pragma" to "no-cache",
 )
@@ -496,6 +498,7 @@ class FourD4YService(
     override val requiresLogin = true
     override val supportsCommenting = true
     override val supportsThreadCreation = true
+    private var currentFormHash: String? = null
     override val currentUsername: String?
         get() = store?.getSetting("detected_4d4y_username")?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -537,6 +540,9 @@ class FourD4YService(
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
         val cookies = authCookies()
         val html = fetch(threadDetailUrl(threadId, page, cookies), cookies)
+        if (html.contains("无权访问该版块") || html.contains("无权进行当前操作")) {
+            throw FeedflowError.AuthRequired
+        }
         rememberLoggedInUsername(html)
         val parsed = parseThreadDetailHtml(html, threadId, page)
             ?: throw FeedflowError.Parsing(id, "threadDetail", html.take(200))
@@ -600,6 +606,7 @@ class FourD4YService(
         if (hasLogout || html.contains("sid=")) {
             FourD4YParser.extractSid(html)?.let { store?.saveSetting("4d4y_sid", it) }
         }
+        extractFormHash(html)?.let { currentFormHash = it }
         rememberLoggedInUsername(html)
     }
 
@@ -647,8 +654,11 @@ class FourD4YService(
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        val formHtml = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$topicId", cookies), cookies)
-        val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "replyFormhash", formHtml.take(200))
+        if (currentFormHash == null) {
+            val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId", cookies), cookies)
+            currentFormHash = extractFormHash(formHtml)
+        }
+        val formHash = currentFormHash ?: throw FeedflowError.Parsing(id, "replyFormhash", "no formhash available")
         val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId&extra=&replysubmit=yes&inajax=1", cookies),
             body = listOf(
@@ -675,7 +685,8 @@ class FourD4YService(
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
         val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId", cookies), cookies)
-        val formHash = extractFormHash(formHtml) ?: throw FeedflowError.Parsing(id, "newThreadFormhash", formHtml.take(200))
+        currentFormHash = extractFormHash(formHtml)
+        val formHash = currentFormHash ?: throw FeedflowError.Parsing(id, "newThreadFormhash", formHtml.take(200))
         val typeField = extractFirstTypeId(formHtml)?.let { "&typeid=${it.gbkFormEncode()}" }.orEmpty()
         val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=newthread&fid=$categoryId&extra=&topicsubmit=yes&inajax=1", cookies),
@@ -694,7 +705,8 @@ class FourD4YService(
         val threadHtml = fetch(withSid("https://www.4d4y.com/forum/viewthread.php?tid=$threadId", cookies), cookies)
         val pid = parseFirstPostId(threadHtml) ?: throw FeedflowError.Parsing(id, "deletePid", threadHtml.take(200))
         val editHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1", cookies), cookies)
-        val formHash = extractFormHash(editHtml) ?: throw FeedflowError.Parsing(id, "deleteFormhash", editHtml.take(200))
+        currentFormHash = extractFormHash(editHtml)
+        val formHash = currentFormHash ?: throw FeedflowError.Parsing(id, "deleteFormhash", editHtml.take(200))
         val response = httpClient.post(
             url = withSid("https://www.4d4y.com/forum/post.php?action=edit&fid=$categoryId&tid=$threadId&pid=$pid&page=1&editsubmit=yes&inajax=1", cookies),
             body = "formhash=${formHash.gbkFormEncode()}&delete=1&editsubmit=yes&inajax=1",
@@ -711,6 +723,7 @@ class FourD4YService(
         "X-Requested-With" to "XMLHttpRequest",
         "Referer" to referer,
         "Origin" to "https://www.4d4y.com",
+        "User-Agent" to FOURD4Y_MOBILE_UA,
     )
 
     private fun ensureMutationSucceeded(operation: String, response: String) {
@@ -1159,6 +1172,25 @@ class FourD4YService(
             var processed = html
                 .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
                 .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            processed = Regex("""<font[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { match ->
+                    val size = match.groupValues[1].toIntOrNull() ?: 99
+                    if (size <= 4) "" else match.value
+                }
+            processed = Regex("""<div\s+class=["']quote["'][^>]*>\s*<blockquote>\s*(.*?)\s*</blockquote>\s*</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { match ->
+                    val inner = match.groupValues[1]
+                    val cleaned = Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]*>.*?</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                        .replace(inner, "")
+                    val fontCleaned = Regex("""<font[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                        .replace(cleaned) { fm ->
+                            val sz = fm.groupValues[1].toIntOrNull() ?: 99
+                            if (sz <= 4) "" else fm.value
+                        }
+                    "\n[QUOTE]${fontCleaned.trim()}[/QUOTE]\n"
+                }
+            processed = Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]*>.*?</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
             processed = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).replace(processed) { match ->
                 val src = match.groupValues[1]
                 if (src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif")) {
@@ -1171,7 +1203,7 @@ class FourD4YService(
             processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).replace(processed) { match ->
                 val href = match.groupValues[1].decodeHtmlEntities()
                 val label = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
-                if (label.isBlank() || label == href) href else "$label ($href)"
+                if (label.isBlank() || label == href || href.startsWith("javascript:", ignoreCase = true)) label else "$label ($href)"
             }
             return processed
                 .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
