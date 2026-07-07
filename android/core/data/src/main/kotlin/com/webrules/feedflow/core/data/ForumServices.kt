@@ -501,7 +501,8 @@ class FourD4YService(
 
     override suspend fun restoreSession(): Boolean {
         val cookies = store?.getCookies(id).orEmpty()
-        if (!cookies.any { it.domain.contains("4d4y.com") && SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies) }) {
+        val siteCookies = cookies.filter { it.domain.contains("4d4y.com") }
+        if (!siteCookies.any { SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(siteCookies) }) {
             return false
         }
         val html = runCatching { fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies) }.getOrNull() ?: return false
@@ -564,7 +565,7 @@ class FourD4YService(
         httpClient.get(url, cookies, FOURD4Y_HEADERS, "GB18030")
 
     private fun withSid(url: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): String {
-        val sid = cookies.firstOrNull { it.name.equals("sid", ignoreCase = true) }?.value
+        val sid = cookies.firstOrNull { it.name.equals("sid", ignoreCase = true) || it.name.equals("cdb_sid", ignoreCase = true) }?.value
             ?: store?.getSetting("4d4y_sid")
             ?: return url
         val separator = if (url.contains("?")) "&" else "?"
@@ -590,6 +591,18 @@ class FourD4YService(
         return if (page > 1) "$base&page=$page&extra=page%3D1" else base
     }
 
+    private fun extractAndSaveSessionArtifacts(html: String) {
+        val lower = html.lowercase()
+        val hasLogout = lower.contains("action=logout") || lower.contains("action%3dlogout") || html.contains("退出")
+        val hasLogin = (lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
+        val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
+        if (hasLogin || isChallenge) return
+        if (hasLogout || html.contains("sid=")) {
+            FourD4YParser.extractSid(html)?.let { store?.saveSetting("4d4y_sid", it) }
+        }
+        rememberLoggedInUsername(html)
+    }
+
     private fun validateSessionHtml(html: String): Boolean {
         val forums = FourD4YParser.parseCategories(html)
         val lower = html.lowercase()
@@ -604,7 +617,8 @@ class FourD4YService(
         cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
     ): List<Community> {
         if (any { it.id == "2" || it.name.equals("Discovery", ignoreCase = true) }) return this
-        if (!SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies)) return this
+        val hasAuthCookies = cookies.any { it.domain.contains("4d4y.com") && (it.name.contains("auth", ignoreCase = true) || it.name.contains("member", ignoreCase = true) || it.name.contains("login", ignoreCase = true)) }
+        if (!hasAuthCookies && !SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies)) return this
         val html = runCatching {
             fetch(withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=2", cookies), cookies)
         }.getOrNull() ?: return this
@@ -617,9 +631,11 @@ class FourD4YService(
     }
 
     private fun rememberAuthenticatedPageArtifacts(html: String) {
-        if (!validateSessionHtml(html)) return
-        FourD4YParser.extractSid(html)?.let { store?.saveSetting("4d4y_sid", it) }
-        rememberLoggedInUsername(html)
+        if (!validateSessionHtml(html)) {
+            extractAndSaveSessionArtifacts(html)
+            return
+        }
+        extractAndSaveSessionArtifacts(html)
     }
 
     private fun rememberLoggedInUsername(html: String) {
@@ -1048,7 +1064,7 @@ class FourD4YService(
         val patterns = listOf(
             """<img[^>]+class=["'][^"']*avatar[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']""",
             """<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]+class=["'][^"']*avatar[^"']*["']""",
-            """<img[^>]+(?:src|data-src|file)=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
+            """<img[^>]+?(?:src|data-src|file)=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
             """<img[^>]+srcset=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
             """background(?:-image)?\s*:\s*url\(["']?([^"')]+(?:avatar|uc_server|face|head)[^"')]+)["']?\)""",
         )

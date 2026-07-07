@@ -629,7 +629,11 @@ object HackerNewsContentCleaner {
                         ?.get(1)
                         ?: return@mapNotNull null
                     val name = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
-                    if (name.isBlank() || name == "4D4Y") return@mapNotNull null
+                    fid to name
+                }
+                .groupBy({ it.first }, { it.second })
+                .mapNotNull { (fid, names) ->
+                    val name = names.firstOrNull { n -> n.isNotBlank() && n != "4D4Y" } ?: return@mapNotNull null
                     Community(
                         id = fid,
                         name = name,
@@ -639,7 +643,6 @@ object HackerNewsContentCleaner {
                         onlineNow = 0,
                     )
                 }
-                .distinctBy { it.id }
                 .toList()
 
         fun parseThreadRows(html: String, community: Community): List<FeedThread> {
@@ -648,8 +651,9 @@ object HackerNewsContentCleaner {
                 .mapNotNull { match ->
                     val tid = match.groupValues[1]
                     val row = match.groupValues[2]
-                    val title = Regex("""href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=\d+[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                        .find(row)?.groupValues?.get(1)?.cleanThreadListTitle() ?: return@mapNotNull null
+                    val titleRegex = Regex("""href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=\d+[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    val title = titleRegex.findAll(row).mapNotNull { it.groupValues[1].cleanThreadListTitle().takeIf { t -> t.isNotBlank() } }.firstOrNull()
+                        ?: return@mapNotNull null
                     val author = extractThreadListAuthor(row)
                     val authorId = author?.first.orEmpty()
                     val authorName = author?.second ?: "Unknown"
@@ -803,7 +807,7 @@ object HackerNewsContentCleaner {
             val raw = listOf(
                 """<img[^>]+class=["'][^"']*avatar[^"']*["'][^>]+(?:src|data-src)=["']([^"']+)["']""",
                 """<img[^>]+(?:src|data-src)=["']([^"']+)["'][^>]+class=["'][^"']*avatar[^"']*["']""",
-                """<img[^>]+(?:src|data-src|file)=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
+                """<img[^>]+?(?:src|data-src|file)=["']([^"']*(?:avatar|uc_server|face|head)[^"']*)["']""",
             ).firstNotNullOfOrNull { pattern ->
                 Regex(pattern, RegexOption.IGNORE_CASE).find(context)?.groupValues?.get(1)
             }

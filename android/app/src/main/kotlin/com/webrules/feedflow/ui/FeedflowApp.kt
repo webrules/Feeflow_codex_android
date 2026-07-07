@@ -3475,11 +3475,21 @@ private fun AvatarView(avatar: String, fallbackText: String, sizeDp: Int) {
                 contentDescription = stringResource(R.string.avatar_for, fallbackText),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                loading = { Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) },
-                error = { Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold) },
+                loading = {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    }
+                },
+                error = {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    }
+                },
             )
         } else {
-            Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(initial, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            }
         }
     }
 }
