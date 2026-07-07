@@ -1159,6 +1159,25 @@ class FourD4YService(
             var processed = html
                 .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
                 .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            processed = Regex("""<font[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { match ->
+                    val size = match.groupValues[1].toIntOrNull() ?: 99
+                    if (size <= 4) "" else match.value
+                }
+            processed = Regex("""<div\s+class=["']quote["'][^>]*>\s*<blockquote>\s*(.*?)\s*</blockquote>\s*</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { match ->
+                    val inner = match.groupValues[1]
+                    val cleaned = Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]*>.*?</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                        .replace(inner, "")
+                    val fontCleaned = Regex("""<font[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                        .replace(cleaned) { fm ->
+                            val sz = fm.groupValues[1].toIntOrNull() ?: 99
+                            if (sz <= 4) "" else fm.value
+                        }
+                    "\n[QUOTE]${fontCleaned.trim()}[/QUOTE]\n"
+                }
+            processed = Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]*>.*?</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
             processed = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).replace(processed) { match ->
                 val src = match.groupValues[1]
                 if (src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif")) {
@@ -1171,7 +1190,7 @@ class FourD4YService(
             processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).replace(processed) { match ->
                 val href = match.groupValues[1].decodeHtmlEntities()
                 val label = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
-                if (label.isBlank() || label == href) href else "$label ($href)"
+                if (label.isBlank() || label == href || href.startsWith("javascript:", ignoreCase = true)) label else "$label ($href)"
             }
             return processed
                 .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
