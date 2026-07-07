@@ -21,6 +21,7 @@ data class LoadableContent<T>(
 data class ThreadDetailContent(
     val thread: FeedThread,
     val comments: List<Comment>,
+    val totalPages: Int? = null,
 )
 
 data class FeedflowHomeState(
@@ -107,15 +108,19 @@ class FeedflowAppStateController(
     suspend fun refreshDetail(site: ForumSite, thread: FeedThread, page: Int = 1): LoadableContent<ThreadDetailContent> {
         val result = repository.loadThreadDetail(site, thread, page)
         return contentFromResult(
-            result = result.map { (freshThread, comments) ->
-                ThreadDetailContent(mergeDetailThread(freshThread, current = thread), comments)
+            result = result.map { (freshThread, comments, totalPages) ->
+                ThreadDetailContent(mergeDetailThread(freshThread, current = thread), comments, totalPages)
             },
             fallback = ThreadDetailContent(thread, emptyList()),
         ).also { detailCache[detailKey(site, thread)] = it }
     }
 
-    suspend fun moreComments(site: ForumSite, thread: FeedThread, page: Int): List<Comment> =
-        repository.loadMoreComments(site, thread, page)
+    suspend fun moreComments(site: ForumSite, thread: FeedThread, page: Int): List<Comment> {
+        val (comments, totalPages) = repository.loadMoreComments(site, thread, page)
+        if (totalPages != null && page > totalPages) return emptyList()
+        val existingIds = detailCache[detailKey(site, thread)]?.value?.comments?.map { it.id }?.toSet().orEmpty()
+        return comments.filter { it.id !in existingIds }
+    }
 
     fun supportsCommentPagination(site: ForumSite): Boolean = repository.supportsCommentPagination(site)
 

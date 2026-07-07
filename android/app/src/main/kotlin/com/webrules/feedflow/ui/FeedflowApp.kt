@@ -554,7 +554,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 content = appStateController.refreshDetail(current.site, activeThread)
                 extraComments = emptyList()
                 commentPage = 1
-                canLoadMore = appStateController.supportsCommentPagination(current.site) && content.value.comments.isNotEmpty()
+                canLoadMore = appStateController.supportsCommentPagination(current.site) &&
+                    content.value.comments.isNotEmpty() &&
+                    (content.value.totalPages == null || commentPage < content.value.totalPages!!)
             }
             val contextThreads = current.contextThreads
             val activeIndex = contextThreads.indexOfFirst { it.id == activeThread.id }

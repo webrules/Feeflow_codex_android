@@ -91,16 +91,16 @@ class FeedflowRepository(
         )
     }
 
-    suspend fun loadThreadDetail(site: ForumSite, thread: FeedThread, page: Int = 1): CacheFirstResult<Pair<FeedThread, List<Comment>>> {
+    suspend fun loadThreadDetail(site: ForumSite, thread: FeedThread, page: Int = 1): CacheFirstResult<Triple<FeedThread, List<Comment>, Int?>> {
         val cached = store.getCachedThread(thread.id, site.serviceId)?.takeUnless {
             site == ForumSite.FourD4Y && it.first.content.contains("Could not parse content.", ignoreCase = true)
-        }
+        }?.let { Triple(it.first, it.second, null) }
         return runCatching {
             withContext(Dispatchers.IO) {
                 serviceFactory(site).fetchThreadDetail(thread.id, page)
             }.let { detail ->
                 store.saveCachedThread(thread.id, site.serviceId, detail.thread, detail.comments)
-                detail.thread to detail.comments
+                Triple(detail.thread, detail.comments, detail.totalPages)
             }
         }.fold(
             onSuccess = { CacheFirstResult(cached = cached, fresh = it) },
@@ -108,12 +108,12 @@ class FeedflowRepository(
         )
     }
 
-    suspend fun loadMoreComments(site: ForumSite, thread: FeedThread, page: Int): List<Comment> =
+    suspend fun loadMoreComments(site: ForumSite, thread: FeedThread, page: Int): Pair<List<Comment>, Int?> =
         runCatching {
             withContext(Dispatchers.IO) {
-                serviceFactory(site).fetchThreadDetail(thread.id, page).comments
-            }
-        }.getOrDefault(emptyList())
+                serviceFactory(site).fetchThreadDetail(thread.id, page)
+            }.let { it.comments to it.totalPages }
+        }.getOrDefault(emptyList<Comment>() to null)
 
     fun supportsCommentPagination(site: ForumSite): Boolean = site == ForumSite.FourD4Y
 
