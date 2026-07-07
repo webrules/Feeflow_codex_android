@@ -7,6 +7,7 @@ import com.webrules.feedflow.core.model.FeedThread
 import com.webrules.feedflow.core.model.ForumSite
 import com.webrules.feedflow.core.model.User
 import com.webrules.feedflow.core.network.FeedflowHttpClient
+import com.webrules.feedflow.core.network.HttpStatusException
 import com.webrules.feedflow.core.network.UnimplementedFeedflowHttpClient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -425,6 +426,8 @@ class DiscourseService(
     override val supportsThreadCreation = true
     override fun canCreateThread(community: Community): Boolean = true
 
+    private var csrfToken: String? = null
+
     override suspend fun restoreSession(): Boolean {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) return false
@@ -442,8 +445,9 @@ class DiscourseService(
         DiscourseParser.parseCategories(httpClient.get("https://linux.do/categories.json", store?.getCookies(id).orEmpty()))
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
-        val path = if (categoryId == "latest") "latest.json" else "c/$categoryId.json"
-        val json = httpClient.get("https://linux.do/$path?page=$page", store?.getCookies(id).orEmpty())
+        val pageIndex = (page - 1).coerceAtLeast(0)
+        val path = if (categoryId == "latest") "latest.json" else "c/$categoryId/l/latest.json"
+        val json = httpClient.get("https://linux.do/$path?page=$pageIndex", store?.getCookies(id).orEmpty())
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "linux_do", 0, 0)
         return DiscourseParser.parseTopicList(json, community)
     }
@@ -455,23 +459,71 @@ class DiscourseService(
     }
 
     override suspend fun createThread(categoryId: String, title: String, content: String) {
-        val cookies = store?.getCookies(id).orEmpty()
-        if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        httpClient.post(
-            url = "https://linux.do/posts.json",
-            body = "title=${title.formEncode()}&raw=${content.formEncode()}&category=${categoryId.formEncode()}",
-            cookies = cookies,
-        )
+        if (!restoreSession()) throw FeedflowError.AuthRequired
+        val token = fetchCsrfToken()
+        val numericCategory = numericCategoryId(categoryId)
+            ?: throw FeedflowError.UnsupportedFeature("createThread: invalid category id $categoryId")
+        val body = JsonObject(
+            mapOf(
+                "title" to JsonPrimitive(title),
+                "raw" to JsonPrimitive(content),
+                "category" to JsonPrimitive(numericCategory),
+            ),
+        ).toString()
+        postDiscourseJson(body, token)
     }
 
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
-        val cookies = store?.getCookies(id).orEmpty()
-        if (cookies.isEmpty()) throw FeedflowError.AuthRequired
+        if (!restoreSession()) throw FeedflowError.AuthRequired
+        val token = fetchCsrfToken()
+        val numericTopicId = topicId.toIntOrNull()
+            ?: throw FeedflowError.UnsupportedFeature("postComment: invalid topic id $topicId")
+        val body = JsonObject(
+            mapOf(
+                "topic_id" to JsonPrimitive(numericTopicId),
+                "raw" to JsonPrimitive(content),
+            ),
+        ).toString()
+        postDiscourseJson(body, token)
+    }
+
+    private suspend fun postDiscourseJson(body: String, csrfToken: String) {
         httpClient.post(
             url = "https://linux.do/posts.json",
-            body = "topic_id=${topicId.formEncode()}&raw=${content.formEncode()}",
-            cookies = cookies,
+            body = body,
+            cookies = store?.getCookies(id).orEmpty(),
+            contentType = "application/json; charset=UTF-8",
+            headers = mapOf(
+                "Accept" to "application/json",
+                "Origin" to "https://linux.do",
+                "X-CSRF-Token" to csrfToken,
+            ),
+            forcedCharset = null,
         )
+    }
+
+    private suspend fun fetchCsrfToken(): String {
+        csrfToken?.let { return it }
+        val cookies = store?.getCookies(id).orEmpty()
+        val body = try {
+            httpClient.get(
+                "https://linux.do/session/csrf.json",
+                cookies,
+                mapOf("Accept" to "application/json"),
+            )
+        } catch (e: HttpStatusException) {
+            if (e.statusCode == 403) throw FeedflowError.AuthRequired
+            throw e
+        }
+        val token = ZhihuJson.parse(body)?.obj()?.str("csrf")
+            ?: throw FeedflowError.Parsing("linux_do", "csrf token")
+        csrfToken = token
+        return token
+    }
+
+    private fun numericCategoryId(categoryId: String): Int? {
+        categoryId.toIntOrNull()?.let { return it }
+        return categoryId.split("/").lastOrNull()?.toIntOrNull()
     }
 
     override suspend fun searchThreads(query: String, page: Int): SearchResult {

@@ -80,13 +80,14 @@ class SourceServiceWiringTest {
         val httpClient = SourceFixtureHttpClient(
             "https://linux.do/session/current.json" to """{"current_user":{"id":1,"username":"alice"}}""",
             "https://linux.do/categories.json" to """{"category_list":{"categories":[{"id":5,"name":"General","description":"Talk","slug":"general","topic_count":42}]}}""",
-            "https://linux.do/c/5.json?page=1" to """{"topic_list":{"topics":[{"id":9,"title":"Linux topic","posts_count":3}]}}""",
+            "https://linux.do/c/5/l/latest.json?page=0" to """{"topic_list":{"topics":[{"id":9,"title":"Linux topic","posts_count":3}]}}""",
             "https://linux.do/t/9.json?page=1" to """
                 {"title":"Linux topic","category_id":5,"post_stream":{"posts":[
                   {"id":91,"username":"alice","cooked":"<p>Original &amp; post</p>"},
                   {"id":92,"username":"bob","cooked":"<p>Reply<br>body</p>"}
                 ]}}
             """.trimIndent(),
+            "https://linux.do/session/csrf.json" to """{"csrf":"csrf-token-123"}""",
             "https://linux.do/search/query?term=android+parity&page=1" to """
                 {
                   "topics":[{"id":88,"title":"Android &amp; parity","created_at":"2026-07-03T12:00:00Z","posts_count":3,"like_count":7,"category_id":5,"tags":["android"]}],
@@ -118,9 +119,13 @@ class SourceServiceWiringTest {
         assertTrue(search.hasMore)
         service.createThread("5", "New title", "New body")
         assertEquals("https://linux.do/posts.json", httpClient.lastPostUrl)
-        assertEquals("title=New+title&raw=New+body&category=5", httpClient.lastPostBody)
+        assertEquals("""{"title":"New title","raw":"New body","category":5}""", httpClient.lastPostBody)
+        assertEquals("application/json; charset=UTF-8", httpClient.lastContentType)
+        assertEquals("csrf-token-123", httpClient.lastPostHeaders["X-CSRF-Token"])
+        assertEquals("https://linux.do", httpClient.lastPostHeaders["Origin"])
         service.postComment("9", "5", "Reply body")
-        assertEquals("topic_id=9&raw=Reply+body", httpClient.lastPostBody)
+        assertEquals("""{"topic_id":9,"raw":"Reply body"}""", httpClient.lastPostBody)
+        assertEquals("csrf-token-123", httpClient.lastPostHeaders["X-CSRF-Token"])
         assertEquals("_t=token", httpClient.lastCookieHeader)
     }
 
