@@ -1321,6 +1321,7 @@ class ZhihuService(
     private val hotCommunity = Community("hot", "知乎热榜", "", "zhihu", 0, 0)
     private val questionDataCache = mutableMapOf<String, Pair<String, String>>()
     private val downvotedSettingKey = "zhihu_downvoted_ids"
+    private var nextPageURL: String? = null
 
     private fun cookies() = store?.getCookies(id).orEmpty()
 
@@ -1411,39 +1412,56 @@ class ZhihuService(
     }
 
     private suspend fun fetchRecommendFeed(page: Int): List<FeedThread> {
-        val url = if (page <= 1) {
-            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10"
-        } else {
-            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=$page"
-        }
-        val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
-        val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
+        val minimumVisible = if (page <= 1) 10 else 1
+        val maxAttempts = if (page <= 1) 6 else 1
         val seen = linkedSetOf<String>()
-        val threads = mutableListOf<FeedThread>()
-        for (element in data) {
-            val item = element.obj() ?: continue
-            if (item.str("type") == "feed_advert") continue
-            val target = item.obj("target") ?: continue
-            val targetType = target.str("type") ?: continue
-            if (targetType !in listOf("answer", "article", "question", "pin")) continue
-            if (ZhihuParser.filterReason(target) != null) continue
-            val targetId = target.longId("id") ?: continue
-            val threadId = "${targetType}_$targetId"
-            if (!seen.add(threadId)) continue
-            if (isFilteredZhihuTarget(threadId, targetId.toString())) continue
-            threads += FeedThread(
-                id = threadId,
-                title = ZhihuParser.effectiveTitle(target),
-                content = target.str("excerpt").orEmpty().decodeHtmlEntities(),
-                author = ZhihuParser.author(target.obj("author")),
-                community = recommendCommunity,
-                timeAgo = ZhihuParser.formatTimestamp(target.int("created_time")),
-                likeCount = target.int("voteup_count") ?: 0,
-                commentCount = target.int("comment_count") ?: 0,
-                tags = listOf(ZhihuParser.typeDescription(targetType)),
-            )
+        val allThreads = mutableListOf<FeedThread>()
+        var nextOverride: String? = null
+
+        for (attempt in 0 until maxAttempts) {
+            val url = when {
+                page <= 1 && attempt == 0 -> {
+                    nextPageURL = null
+                    "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10"
+                }
+                nextOverride != null || nextPageURL != null -> nextOverride ?: nextPageURL!!
+                page > 1 -> "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=$page"
+                else -> break
+            }
+
+            val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: break
+            val root = ZhihuJson.parse(body)?.obj() ?: break
+            val data = root.arr("data") ?: emptyList()
+            nextOverride = root.obj("paging").str("next")
+            nextPageURL = nextOverride
+
+            for (element in data) {
+                val item = element.obj() ?: continue
+                if (item.str("type") == "feed_advert") continue
+                val target = item.obj("target") ?: continue
+                val targetType = target.str("type") ?: continue
+                if (targetType !in listOf("answer", "article", "question", "pin")) continue
+                if (ZhihuParser.filterReason(target) != null) continue
+                val targetId = target.longId("id") ?: continue
+                val threadId = "${targetType}_$targetId"
+                if (!seen.add(threadId)) continue
+                if (isFilteredZhihuTarget(threadId, targetId.toString())) continue
+                allThreads += FeedThread(
+                    id = threadId,
+                    title = ZhihuParser.effectiveTitle(target),
+                    content = target.str("excerpt").orEmpty().decodeHtmlEntities(),
+                    author = ZhihuParser.author(target.obj("author")),
+                    community = recommendCommunity,
+                    timeAgo = ZhihuParser.formatTimestamp(target.int("created_time")),
+                    likeCount = target.int("voteup_count") ?: 0,
+                    commentCount = target.int("comment_count") ?: 0,
+                    tags = listOf(ZhihuParser.typeDescription(targetType)),
+                )
+            }
+
+            if (allThreads.size >= minimumVisible || nextOverride == null) break
         }
-        return threads
+        return allThreads
     }
 
     private fun isFilteredZhihuTarget(threadId: String, targetId: String): Boolean =
@@ -1458,7 +1476,7 @@ class ZhihuService(
 
     private suspend fun fetchHotList(page: Int): List<FeedThread> {
         if (page > 1) return emptyList()
-        val url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true"
+        val url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=10&desktop=true"
         val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull() ?: return emptyList()
         val data = ZhihuJson.parse(body)?.obj()?.arr("data") ?: return emptyList()
         val threads = mutableListOf<FeedThread>()

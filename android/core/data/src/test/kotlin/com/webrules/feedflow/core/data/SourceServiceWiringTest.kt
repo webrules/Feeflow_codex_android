@@ -597,7 +597,7 @@ class SourceServiceWiringTest {
     @Test fun zhihuServiceParsesHotSearchAndDetailJson() = runBlocking {
         val service = ZhihuService(
             SourceFixtureHttpClient(
-                "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
+                "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=10&desktop=true" to
                     """{"data":[{"id":"0_987","detail_text":"765万热度","target":{"id":123,"type":"question","url":"https://api.zhihu.com/questions/123","title":"Hot question","excerpt":"<b>Hot excerpt</b>","author":{"id":"author-1","name":"提问者","avatar_url":"https://pic.zhimg.com/author.jpg"},"metrics_area":{"follower_count":10,"answer_count":5}}}]}""",
                 "https://www.zhihu.com/api/v4/search_v3?q=android+parity&t=content&correction=1&offset=0&limit=20" to
                     """{"data":[{"object":{"type":"article","id":789,"title":"Search article","excerpt":"body","author":{"name":"A"}}}],"paging":{"is_end":true}}""",
@@ -646,7 +646,7 @@ class SourceServiceWiringTest {
 
     @Test fun zhihuRepositoryKeepsHotMetadataForQuestionDetailFallback() = runBlocking {
         val httpClient = SourceFixtureHttpClient(
-            "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=20&desktop=true" to
+            "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=10&desktop=true" to
                 """{"data":[{"card_id":"Q_321","target":{"title":"Cached hot title","excerpt":"Cached hot body"}}]}""",
             "https://www.zhihu.com/api/v4/questions/321?include=detail,excerpt,answer_count,visit_count,comment_count,follower_count,topics,author" to
                 """{"error":{"code":101,"message":"身份未经过验证"}}""",
@@ -694,6 +694,39 @@ class SourceServiceWiringTest {
         assertEquals("application/json; charset=UTF-8", httpClient.lastContentType)
         assertEquals("z_c0=token", httpClient.lastCookieHeader)
         assertEquals("789", store.getSetting("zhihu_downvoted_ids"))
+    }
+
+    @Test fun zhihuRecommendAccumulatesAcrossBatchesUntilMinimumVisible() = runBlocking {
+        val store = InMemoryFeedflowStore()
+        store.saveCookies("zhihu", listOf(FeedflowCookie("z_c0", "token", "zhihu.com", expiresAtMillis = null)))
+        val httpClient = SourceFixtureHttpClient(
+            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10" to
+                """{"data":[
+                    {"type":"feed","target":{"type":"answer","id":1,"excerpt":"a1","voteup_count":20,"comment_count":0,"question":{"title":"Q1"},"author":{"name":"A1"}}},
+                    {"type":"feed","target":{"type":"article","id":2,"excerpt":"a2","voteup_count":30,"comment_count":0,"title":"Q2","author":{"name":"A2","follower_count":100}}}
+                ],"paging":{"next":"https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=2"}}""",
+            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=2" to
+                """{"data":[
+                    {"type":"feed","target":{"type":"answer","id":3,"excerpt":"a3","voteup_count":21,"comment_count":0,"question":{"title":"Q3"},"author":{"name":"A3"}}},
+                    {"type":"feed","target":{"type":"article","id":4,"excerpt":"a4","voteup_count":31,"comment_count":0,"title":"Q4","author":{"name":"A4","follower_count":101}}}
+                ],"paging":{"next":"https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=4"}}""",
+            "https://www.zhihu.com/api/v3/feed/topstory/recommend?desktop=true&limit=10&after_id=4" to
+                """{"data":[
+                    {"type":"feed","target":{"type":"answer","id":5,"excerpt":"a5","voteup_count":22,"comment_count":0,"question":{"title":"Q5"},"author":{"name":"A5"}}},
+                    {"type":"feed","target":{"type":"answer","id":6,"excerpt":"a6","voteup_count":23,"comment_count":0,"question":{"title":"Q6"},"author":{"name":"A6"}}},
+                    {"type":"feed","target":{"type":"answer","id":7,"excerpt":"a7","voteup_count":24,"comment_count":0,"question":{"title":"Q7"},"author":{"name":"A7"}}},
+                    {"type":"feed","target":{"type":"answer","id":8,"excerpt":"a8","voteup_count":25,"comment_count":0,"question":{"title":"Q8"},"author":{"name":"A8"}}},
+                    {"type":"feed","target":{"type":"answer","id":9,"excerpt":"a9","voteup_count":26,"comment_count":0,"question":{"title":"Q9"},"author":{"name":"A9"}}},
+                    {"type":"feed","target":{"type":"answer","id":10,"excerpt":"a10","voteup_count":27,"comment_count":0,"question":{"title":"Q10"},"author":{"name":"A10"}}},
+                    {"type":"feed","target":{"type":"answer","id":11,"excerpt":"a11","voteup_count":28,"comment_count":0,"question":{"title":"Q11"},"author":{"name":"A11"}}}
+                ],"paging":{"is_end":true}}""",
+        )
+        val service = ZhihuService(httpClient, store)
+        val categories = service.fetchCategories()
+        val threads = service.fetchCategoryThreads("recommend", categories, 1)
+
+        assertEquals(11, threads.size)
+        assertEquals(listOf("answer_1", "article_2", "answer_3", "article_4", "answer_5", "answer_6", "answer_7", "answer_8", "answer_9", "answer_10", "answer_11"), threads.map { it.id })
     }
 
     private fun sampleThread(id: String) = com.webrules.feedflow.core.model.FeedThread(
