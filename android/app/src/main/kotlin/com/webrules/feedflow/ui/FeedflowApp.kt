@@ -118,6 +118,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -1096,6 +1097,7 @@ private fun ThreadDetailScreen(
     var actionError by remember(thread.id) { mutableStateOf<String?>(null) }
     var showingDeleteConfirmation by remember(thread.id) { mutableStateOf(false) }
     var postedReplies by remember(thread.id) { mutableStateOf(emptyList<Comment>()) }
+    val focusManager = LocalFocusManager.current
     val detailListState = rememberLazyListState()
     val justNow = stringResource(R.string.just_now)
     val saidLabel = stringResource(R.string.said)
@@ -1128,7 +1130,7 @@ private fun ThreadDetailScreen(
     }
     Scaffold(
         bottomBar = {
-            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).imePadding()) {
                 if (site.supportsCommenting) {
                     replyState.replyingToUsername?.let { username ->
                         Row(
@@ -1187,6 +1189,8 @@ private fun ThreadDetailScreen(
                                             likeCount = 0,
                                         )
                                         replyState = ReplyComposerState()
+                                        focusManager.clearFocus()
+                                        detailListState.animateScrollToItem(renderedComments.size)
                                     } else {
                                         replyState = replyState.copy(isPosting = false, errorMessage = error.message)
                                     }
