@@ -117,6 +117,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.runtime.CompositionLocalProvider
@@ -370,16 +372,21 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     val context = LocalContext.current
     val store = remember(context, storeOverride) { storeOverride ?: AndroidSqliteFeedflowStore(context) }
     val repository = remember(store, repositoryOverride) { repositoryOverride ?: FeedflowRepository(store = store) }
+    var loginRevision by remember { mutableStateOf(0) }
     val initialHomeState = remember(store) {
         val defaults = FeedflowHomeState()
         FeedflowHomeState(
-            signedInSites = ForumSite.entries.filter { site ->
-                SiteLoginConfig.forSite(site)?.hasAuthenticatedSession(store.getCookies(site.serviceId).orEmpty()) == true
-            }.toSet(),
+            signedInSites = emptySet(),
             geminiApiKey = store.getEncryptedSetting(FeedflowDatabaseContract.geminiApiKey).orEmpty(),
             backgroundPrefetch = BackgroundPrefetchPolicy.loadEnabled(store),
             rssFeeds = store.getRssFeeds().ifEmpty { defaults.rssFeeds },
         )
+    }
+    // Reactive signedInSites — recomputed from cookie state on every loginRevision change
+    val signedInSites = remember(loginRevision) {
+        ForumSite.entries.filter { site ->
+            SiteLoginConfig.forSite(site)?.hasAuthenticatedSession(store.getCookies(site.serviceId).orEmpty()) == true
+        }.toSet()
     }
     val appStateController = remember(repository, initialHomeState) { FeedflowAppStateController(repository, initialHomeState) }
     val authCoordinator = remember(store) { AuthSessionCoordinator(store) }
@@ -390,7 +397,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     }
     val appScope = rememberCoroutineScope()
     var route by remember { mutableStateOf<FeedflowRoute>(FeedflowRoute.SiteList) }
-    var homeState by remember { mutableStateOf(appStateController.homeState) }
+    var homeState by remember { mutableStateOf(appStateController.homeState.copy(signedInSites = signedInSites)) }
     var bookmarkRevision by remember { mutableStateOf(0) }
     var filterRevision by remember { mutableStateOf(0) }
     var darkTheme by remember { mutableStateOf(store.getSetting(DarkThemeSettingKey)?.toBooleanStrictOrNull() ?: false) }
@@ -439,8 +446,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 communities = content.value,
                 isLoading = content.isLoading,
                 warning = content.warning,
-                loginRequired = current.site.requiresLogin &&
-                    (!homeState.signedInSites.contains(current.site) || shouldShowLoginForWarning(current.site, content.warning)),
+                loginRequired = is4D4YLoginRequired(current.site, signedInSites.contains(current.site), content.warning),
                 onBack = { route = FeedflowRoute.SiteList },
                 onHome = { route = FeedflowRoute.SiteList },
                 onRefresh = { refreshToken += 1 },
@@ -489,8 +495,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
-                loginRequired = current.site.requiresLogin &&
-                    (!homeState.signedInSites.contains(current.site) || shouldShowLoginForWarning(current.site, content.warning)),
+                loginRequired = is4D4YLoginRequired(current.site, signedInSites.contains(current.site), content.warning),
                 anchorThreadId = current.anchorThreadId,
                 onBack = { route = FeedflowRoute.Communities(current.site) },
                 onHome = { route = FeedflowRoute.SiteList },
@@ -568,7 +573,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 isLoading = content.isLoading,
                 warning = content.warning,
                 loadedFromCache = content.loadedFromCache,
-                loginRequired = shouldShowLoginForWarning(current.site, content.warning),
+                loginRequired = is4D4YLoginRequired(current.site, signedInSites.contains(current.site), content.warning),
                 webUrl = appStateController.webUrl(current.site, content.value.thread),
                 hasPrevious = activeIndex > 0,
                 hasNext = activeIndex >= 0 && activeIndex < contextThreads.size - 1,
@@ -646,12 +651,13 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             )
         }
         FeedflowRoute.Login -> LoginScreen(
-            signedInSites = homeState.signedInSites,
+            signedInSites = signedInSites,
             onLogout = { site ->
                 SiteLoginConfig.forSite(site)?.let(cookieBridge::clearSiteCookies)
                 authCoordinator.logout(site)
+                loginRevision += 1
                 appStateController.setSignedIn(site, false)
-                homeState = appStateController.homeState
+                homeState = appStateController.homeState.copy(signedInSites = signedInSites)
             },
             onWebLogin = { route = FeedflowRoute.WebLogin(it) },
             onClose = { route = FeedflowRoute.SiteList },
@@ -733,7 +739,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
         is FeedflowRoute.SearchResults -> SearchResultsScreen(
             site = current.site,
             query = current.query,
-            requiresLogin = current.site.requiresLogin && !homeState.signedInSites.contains(current.site),
+            loginRequired = is4D4YLoginRequired(current.site, signedInSites.contains(current.site), null),
             anchorThreadId = current.anchorThreadId,
             loader = appStateController,
             onBack = { route = FeedflowRoute.SiteList },
@@ -754,9 +760,10 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             storedCookies = store.getCookies(current.site.serviceId).orEmpty(),
             validateSession = { appStateController.restoreSession(current.site) },
             onAccepted = {
+                loginRevision += 1
                 appStateController.sessionChanged(current.site)
                 appStateController.setSignedIn(current.site, true)
-                homeState = appStateController.homeState
+                homeState = appStateController.homeState.copy(signedInSites = signedInSites)
                 route = if (current.returnTo == FeedflowRoute.Login) {
                     FeedflowRoute.Communities(current.site)
                 } else {
@@ -877,6 +884,7 @@ private fun SiteListScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun CommunitiesScreen(
     site: ForumSite,
     communities: List<Community>,
@@ -907,7 +915,11 @@ private fun CommunitiesScreen(
             )
         },
     ) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = onRefresh,
+            modifier = Modifier.padding(padding),
+        ) {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -928,6 +940,7 @@ private fun CommunitiesScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun ThreadListScreen(
     site: ForumSite,
     community: Community,
@@ -974,7 +987,11 @@ private fun ThreadListScreen(
             )
         },
     ) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = onRefresh,
+            modifier = Modifier.padding(padding),
+        ) {
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
@@ -1052,6 +1069,7 @@ private fun ThreadListScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun ThreadDetailScreen(
     site: ForumSite,
     thread: FeedThread,
@@ -1251,7 +1269,11 @@ private fun ThreadDetailScreen(
                 },
             )
         }
-        ForumBackground(Modifier.padding(padding)) {
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = onRefresh,
+            modifier = Modifier.padding(padding),
+        ) {
             Box(Modifier.fillMaxSize()) {
                 LazyColumn(
                     state = detailListState,
@@ -1492,6 +1514,7 @@ private fun SettingsScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun BookmarksScreen(
     threadBookmarks: List<Pair<FeedThread, String>>,
     urlBookmarks: List<Pair<String, String>>,
@@ -1500,7 +1523,11 @@ private fun BookmarksScreen(
     onUrlClick: (String, String) -> Unit,
 ) {
     Scaffold(bottomBar = { ScreenToolbar(title = stringResource(R.string.bookmarks), onBack = onClose, onHome = onClose) }) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
+        PullToRefreshBox(
+            isRefreshing = false,
+            onRefresh = onClose,
+            modifier = Modifier.padding(padding),
+        ) {
             LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (threadBookmarks.isEmpty() && urlBookmarks.isEmpty()) {
                     item {
@@ -1779,6 +1806,7 @@ private fun CrossSiteAiSummaryScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun DailyRssSummaryScreen(
     loader: FeedflowAppStateController,
     apiKey: String,
@@ -1815,7 +1843,11 @@ private fun DailyRssSummaryScreen(
         isLoading = false
     }
     Scaffold(bottomBar = { ScreenToolbar(title = stringResource(R.string.daily_rss_summary), onBack = onClose, onHome = onClose) }) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
+        PullToRefreshBox(
+            isRefreshing = isLoading,
+            onRefresh = { generateToken += 1 },
+            modifier = Modifier.padding(padding),
+        ) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 when {
                     isLoading -> ForumCard(contentAlignment = Alignment.CenterHorizontally) {
@@ -1960,10 +1992,11 @@ private fun AiSummaryScreen(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun SearchResultsScreen(
     site: ForumSite,
     query: String,
-    requiresLogin: Boolean,
+    loginRequired: Boolean,
     anchorThreadId: String?,
     loader: FeedflowAppStateController,
     onBack: () -> Unit,
@@ -1977,8 +2010,8 @@ private fun SearchResultsScreen(
     var refreshToken by remember(site, query) { mutableStateOf(0) }
     var page by remember(site, query) { mutableStateOf(1) }
     var isLoadingMore by remember(site, query) { mutableStateOf(false) }
-    LaunchedEffect(site, query, requiresLogin, refreshToken) {
-        if (!requiresLogin) {
+    LaunchedEffect(site, query, loginRequired, refreshToken) {
+        if (!loginRequired) {
             results = results.copy(isLoading = true)
             results = loader.search(site, query)
             page = 1
@@ -1986,7 +2019,7 @@ private fun SearchResultsScreen(
         }
     }
     suspend fun loadMoreSearchResults() {
-        if (isLoadingMore || !results.value.hasMore || requiresLogin) return
+        if (isLoadingMore || !results.value.hasMore || loginRequired) return
         isLoadingMore = true
         val nextPage = page + 1
         val next = loader.search(site, query, nextPage)
@@ -2010,8 +2043,13 @@ private fun SearchResultsScreen(
             listState.scrollToItem(rowsBeforeThreads + threadIndex)
         }
     }
-    val needsLogin = requiresLogin ||
-        (site.requiresLogin && results.warning?.contains("Authentication required", ignoreCase = true) == true)
+    val needsLogin = loginRequired || results.warning?.let { w ->
+        w.contains("Authentication required", ignoreCase = true) ||
+        w.contains("login", ignoreCase = true) ||
+        w.contains("auth", ignoreCase = true) ||
+        w.contains("登录") ||
+        w.contains("未登录")
+    } == true
     Scaffold(
         bottomBar = {
             ScreenToolbar(
@@ -2022,7 +2060,11 @@ private fun SearchResultsScreen(
             )
         },
     ) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
+        PullToRefreshBox(
+            isRefreshing = results.isLoading,
+            onRefresh = { refreshToken += 1 },
+            modifier = Modifier.padding(padding),
+        ) {
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(20.dp),
@@ -3101,8 +3143,10 @@ private fun threadListWarning(site: ForumSite, warning: String): String =
         warning
     }
 
-private fun shouldShowLoginForWarning(site: ForumSite, warning: String?): Boolean {
-    if (site != ForumSite.FourD4Y || warning.isNullOrBlank()) return false
+private fun is4D4YLoginRequired(site: ForumSite, isSignedIn: Boolean, warning: String?): Boolean {
+    if (!site.requiresLogin) return false
+    if (!isSignedIn) return true
+    if (warning.isNullOrBlank()) return false
     return warning.contains("Authentication required", ignoreCase = true) ||
         warning.contains("login", ignoreCase = true) ||
         warning.contains("auth", ignoreCase = true) ||
