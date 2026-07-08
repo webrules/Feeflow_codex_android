@@ -709,9 +709,11 @@ class FourD4YService(
         val hasUserPanel = lower.contains("my.php") || lower.contains("memcp.php") || lower.contains("pm.php")
         val hasCredits = lower.contains("积分") || lower.contains("帖子") || lower.contains("credits", ignoreCase = true)
         val hasAvatar = lower.contains("avatar") || html.contains("头像")
-        val hasUsernameDisplay = Regex("""欢迎您回来|space\.php\?uid=\d+|个人中心""").containsMatchIn(html)
+        val hasUsernameDisplay = Regex("""欢迎您回来|space\.php\?uid=\d+|个人中心|我的帖子|我的收藏|控制面板""").containsMatchIn(html)
         val strongAuth = hasLogout || hasDiscovery || hasUserPanel || (hasCredits && hasAvatar) || hasUsernameDisplay
-        return forums.isNotEmpty() && !hasLogin && !isChallenge && strongAuth
+        // Allow validation on forumdisplay pages where categories may not parse
+        val pageIsValid = forums.isNotEmpty() || hasLogout || hasUserPanel || hasUsernameDisplay
+        return pageIsValid && !hasLogin && !isChallenge && strongAuth
     }
 
     private suspend fun List<Community>.withProtectedDiscoveryIfAvailable(

@@ -21,6 +21,10 @@ class AndroidWebLoginCookieBridge(
         webView.settings.domStorageEnabled = true
         webView.settings.setSupportMultipleWindows(true)
         webView.settings.userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36"
+        webView.settings.savePassword = true
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            webView.importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_YES
+        }
     }
 
     fun cookiesFor(config: SiteLoginConfig, currentUrl: String?): List<FeedflowCookie> {
