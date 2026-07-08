@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -49,6 +50,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddCircle
@@ -118,6 +122,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalFocusManager
@@ -373,6 +380,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     val store = remember(context, storeOverride) { storeOverride ?: AndroidSqliteFeedflowStore(context) }
     val repository = remember(store, repositoryOverride) { repositoryOverride ?: FeedflowRepository(store = store) }
     var loginRevision by remember { mutableStateOf(0) }
+    val searchResultCache = remember { mutableMapOf<Pair<ForumSite, String>, LoadableContent<SearchResult>>() }
     val initialHomeState = remember(store) {
         val defaults = FeedflowHomeState()
         FeedflowHomeState(
@@ -399,6 +407,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     var route by remember { mutableStateOf<FeedflowRoute>(FeedflowRoute.SiteList) }
     var homeState by remember { mutableStateOf(appStateController.homeState.copy(signedInSites = signedInSites)) }
     var bookmarkRevision by remember { mutableStateOf(0) }
+    var selectedSearchSite by remember { mutableStateOf(ForumSite.Zhihu) }
     var filterRevision by remember { mutableStateOf(0) }
     var darkTheme by remember { mutableStateOf(store.getSetting(DarkThemeSettingKey)?.toBooleanStrictOrNull() ?: false) }
     var language by remember { mutableStateOf(store.getSetting(LanguageSettingKey) ?: "en") }
@@ -417,6 +426,8 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
         FeedflowRoute.SiteList -> SiteListScreen(
             sites = homeState.visibleSites,
             language = language,
+            selectedSearchSite = selectedSearchSite,
+            onSearchSiteChange = { selectedSearchSite = it },
             onSiteClick = { route = FeedflowRoute.Communities(it) },
             onLogin = { route = FeedflowRoute.Login },
             onSettings = { route = FeedflowRoute.Settings },
@@ -642,7 +653,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                     }
                     error
                 },
-                isBookmarked = store.isBookmarked(content.value.thread.id, current.site.serviceId),
+                isBookmarked = remember(bookmarkRevision, content.value.thread.id) {
+                    store.isBookmarked(content.value.thread.id, current.site.serviceId)
+                },
                 onToggleBookmark = {
                     store.toggleBookmark(content.value.thread, current.site.serviceId)
                     bookmarkRevision += 1
@@ -737,6 +750,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             },
         )
         is FeedflowRoute.SearchResults -> SearchResultsScreen(
+            searchCache = searchResultCache,
             site = current.site,
             query = current.query,
             loginRequired = is4D4YLoginRequired(current.site, signedInSites.contains(current.site), null),
@@ -745,10 +759,11 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             onBack = { route = FeedflowRoute.SiteList },
             onHome = { route = FeedflowRoute.SiteList },
             onLoginRequired = { route = FeedflowRoute.WebLogin(current.site, current) },
-            onThreadClick = { thread ->
+            onThreadClick = { thread, contextThreads ->
                 route = FeedflowRoute.Detail(
                     current.site,
                     thread,
+                    contextThreads = contextThreads,
                     returnTo = current.copy(anchorThreadId = thread.id),
                 )
             },
@@ -818,6 +833,8 @@ private fun FeedflowSystemBars(darkTheme: Boolean) {
 private fun SiteListScreen(
     sites: List<ForumSite>,
     language: String,
+    selectedSearchSite: ForumSite,
+    onSearchSiteChange: (ForumSite) -> Unit,
     onSiteClick: (ForumSite) -> Unit,
     onLogin: () -> Unit,
     onSettings: () -> Unit,
@@ -829,7 +846,6 @@ private fun SiteListScreen(
     onLanguage: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
-    var selectedSearchSite by remember { mutableStateOf(ForumSite.Zhihu) }
     Scaffold(
         bottomBar = {
             HomeToolbar(
@@ -863,7 +879,7 @@ private fun SiteListScreen(
                         selectedSearchSite = selectedSearchSite,
                         query = query,
                         onQueryChange = { query = it },
-                        onSiteChange = { selectedSearchSite = it },
+                        onSiteChange = onSearchSiteChange,
                         onSearch = { onSearch(selectedSearchSite, query.trim()) },
                     )
                 }
@@ -1101,6 +1117,7 @@ private fun ThreadDetailScreen(
     postController: FeedflowAppStateController,
 ) {
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     var speech by remember { mutableStateOf(SpeechPlaybackState()) }
     val ttsController = remember(context) {
@@ -1147,6 +1164,7 @@ private fun ThreadDetailScreen(
         firstImageUrl(thread.content + "\n" + renderedComments.joinToString("\n") { it.content })
     }
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background).imePadding()) {
                 if (site.supportsCommenting) {
@@ -1239,7 +1257,16 @@ private fun ThreadDetailScreen(
                     onBack = onBack,
                     onHome = onHome,
                     onRefresh = onRefresh,
-                    onToggleBookmark = onToggleBookmark,
+                    onToggleBookmark = {
+                        scope.launch {
+                            onToggleBookmark()
+                            val isNowBookmarked = !isBookmarked
+                            snackbarHostState.showSnackbar(
+                                message = if (isNowBookmarked) "Bookmark added" else "Bookmark removed",
+                                duration = SnackbarDuration.Short,
+                            )
+                        }
+                    },
                     onAiSummary = onAiSummary,
                     onSpeak = ::toggleSpeech,
                     onShare = ::shareThread,
@@ -1369,14 +1396,19 @@ private fun ThreadDetailScreen(
                     }
                 }
                 if (hasPrevious || hasNext) {
-                    FloatingThreadNavigationControls(
-                        hasPrevious = hasPrevious,
-                        hasNext = hasNext,
-                        enabled = !isLoading,
-                        onPrevious = onPrevious,
-                        onNext = onNext,
-                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxWidth().fillMaxHeight(0.25f).align(Alignment.BottomEnd),
+                        contentAlignment = Alignment.TopEnd,
+                    ) {
+                        FloatingThreadNavigationControls(
+                            hasPrevious = hasPrevious,
+                            hasNext = hasNext,
+                            enabled = !isLoading,
+                            onPrevious = onPrevious,
+                            onNext = onNext,
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                    }
                 }
             }
         }
@@ -1999,14 +2031,16 @@ private fun SearchResultsScreen(
     loginRequired: Boolean,
     anchorThreadId: String?,
     loader: FeedflowAppStateController,
+    searchCache: MutableMap<Pair<ForumSite, String>, LoadableContent<SearchResult>>,
     onBack: () -> Unit,
     onHome: () -> Unit,
     onLoginRequired: () -> Unit,
-    onThreadClick: (FeedThread) -> Unit,
+    onThreadClick: (FeedThread, List<FeedThread>) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
-    var results by remember(site, query) { mutableStateOf(LoadableContent.loaded(SearchResult(emptyList(), false))) }
+    val cacheKey = Pair(site, query)
+    var results by remember(site, query) { mutableStateOf(searchCache[cacheKey] ?: LoadableContent.loaded(SearchResult(emptyList(), false))) }
     var refreshToken by remember(site, query) { mutableStateOf(0) }
     var page by remember(site, query) { mutableStateOf(1) }
     var isLoadingMore by remember(site, query) { mutableStateOf(false) }
@@ -2014,6 +2048,7 @@ private fun SearchResultsScreen(
         if (!loginRequired) {
             results = results.copy(isLoading = true)
             results = loader.search(site, query)
+            searchCache[cacheKey] = results
             page = 1
             isLoadingMore = false
         }
@@ -2077,6 +2112,14 @@ private fun SearchResultsScreen(
                 results.warning?.let { item { WarningCard(it) } }
                 if (needsLogin) {
                     item { LoginRequiredCard(site = site, onLogin = onLoginRequired) }
+                } else if (results.isLoading && results.value.threads.isEmpty()) {
+                    item {
+                        ForumCard(contentAlignment = Alignment.CenterHorizontally) {
+                            LinearProgressIndicator(modifier = Modifier.width(100.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text(stringResource(R.string.loading))
+                        }
+                    }
                 } else if (results.value.threads.isEmpty()) {
                     item {
                         ForumCard(contentAlignment = Alignment.CenterHorizontally) {
@@ -2086,7 +2129,7 @@ private fun SearchResultsScreen(
                     }
                 } else {
                     items(results.value.threads) { thread ->
-                        ThreadRow(thread = thread, site = site, onClick = { onThreadClick(thread) })
+                        ThreadRow(thread = thread, site = site, onClick = { onThreadClick(thread, results.value.threads) })
                     }
                     if (results.value.hasMore) {
                         item {
@@ -2719,7 +2762,7 @@ private fun CommentRow(
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         if (!hideAvatar) AvatarView(comment.author.avatar, comment.author.username, sizeDp = 32)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2994,19 +3037,19 @@ private fun FloatingThreadNavigationControls(
 
 @Composable
 private fun FloatingThreadNavigationButton(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(42.dp)) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(56.dp)) {
         Box(
             modifier = Modifier
-                .size(42.dp)
+                .size(56.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surface),
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
                 tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(26.dp),
             )
         }
     }
@@ -3265,6 +3308,8 @@ private fun HomeSearchBar(
         SourceSelector(selectedSearchSite, onSelect = onSiteChange)
         BasicTextField(
             value = query,
+            keyboardActions = KeyboardActions(onSearch = { if (query.trim().isNotEmpty()) onSearch() }),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             onValueChange = onQueryChange,
             modifier = Modifier.weight(1f),
             singleLine = true,
