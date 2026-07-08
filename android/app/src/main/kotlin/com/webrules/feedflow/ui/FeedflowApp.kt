@@ -518,7 +518,6 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                         returnTo = current.copy(anchorThreadId = thread.id),
                     )
                 },
-                onNewThread = { route = FeedflowRoute.NewThread(current.site, current.community) },
                 onRefresh = {
                     refreshToken += 1
                 },
@@ -802,14 +801,8 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             },
             onClose = { route = current.returnTo },
         )
+        is FeedflowRoute.NewThread -> {}
         is FeedflowRoute.ImageViewer -> FullScreenImageScreen(url = current.url, onClose = { route = current.returnTo })
-        is FeedflowRoute.NewThread -> NewThreadScreen(
-            site = current.site,
-            community = current.community,
-            postController = appStateController,
-            onCancel = { route = FeedflowRoute.Threads(current.site, current.community) },
-            onPosted = { route = FeedflowRoute.Threads(current.site, current.community) },
-        )
     }
     }
     }
@@ -921,6 +914,7 @@ private fun CommunitiesScreen(
                 title = site.displayName,
                 onBack = onBack,
                 onHome = onHome,
+                showBack = false,
                 actions = {
                     if (site == ForumSite.Rss) {
                         CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), stringResource(R.string.daily_summary), onDailySummary)
@@ -969,7 +963,6 @@ private fun ThreadListScreen(
     onBack: () -> Unit,
     onHome: () -> Unit,
     onThreadClick: (FeedThread) -> Unit,
-    onNewThread: () -> Unit,
     onRefresh: () -> Unit,
     onLoginRequired: () -> Unit,
     onTheme: () -> Unit,
@@ -995,8 +988,8 @@ private fun ThreadListScreen(
                 title = community.name,
                 onBack = onBack,
                 onHome = onHome,
+                showBack = false,
                 actions = {
-                    if (site.supportsThreadCreation) CircularToolbarIcon(FeedflowIconMap.symbol("square.and.pencil"), stringResource(R.string.new_thread_action), onNewThread)
                     CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
                     CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme), onTheme)
                 },
@@ -1251,12 +1244,8 @@ private fun ThreadDetailScreen(
                 }
                 ThreadDetailActionToolbar(
                     loadedFromCache = loadedFromCache,
-                    canDelete = canDelete,
                     isBookmarked = isBookmarked,
-                    isSpeaking = speech.isSpeaking,
-                    onBack = onBack,
                     onHome = onHome,
-                    onRefresh = onRefresh,
                     onToggleBookmark = {
                         scope.launch {
                             onToggleBookmark()
@@ -1267,11 +1256,7 @@ private fun ThreadDetailScreen(
                             )
                         }
                     },
-                    onAiSummary = onAiSummary,
-                    onSpeak = ::toggleSpeech,
-                    onShare = ::shareThread,
                     onTheme = onTheme,
-                    onDelete = { showingDeleteConfirmation = true },
                 )
             }
         },
@@ -2091,6 +2076,7 @@ private fun SearchResultsScreen(
                 title = site.displayName,
                 onBack = onBack,
                 onHome = onHome,
+                showBack = false,
                 actions = { IconButton(onClick = { refreshToken += 1 }) { Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.reload)) } },
             )
         },
@@ -2444,139 +2430,6 @@ private fun FullScreenImageScreen(url: String, onClose: () -> Unit) {
                 rotation = 0
             }) { Text(stringResource(R.string.reset)) }
             Button(onClick = { rotation += 90 }) { Text(stringResource(R.string.rotate_right)) }
-        }
-    }
-}
-
-@Composable
-private fun NewThreadScreen(
-    site: ForumSite,
-    community: Community,
-    postController: FeedflowAppStateController,
-    onCancel: () -> Unit,
-    onPosted: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var composer by remember { mutableStateOf(NewThreadComposerState()) }
-    var selectedImages by remember { mutableStateOf<List<Uri>>(emptyList()) }
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        selectedImages = (selectedImages + uris).distinct()
-    }
-    fun appendContent(value: String) {
-        composer = composer.copy(
-            content = buildString {
-                append(composer.content)
-                if (composer.content.isNotBlank() && !composer.content.endsWith("\n")) append("\n")
-                append(value)
-            },
-            errorMessage = null,
-        )
-    }
-    Scaffold(
-        bottomBar = {
-            ToolbarCard {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
-                    Text(stringResource(R.string.new_thread), fontWeight = FontWeight.SemiBold)
-                    Button(
-                        enabled = composer.canPost,
-                        onClick = {
-                            composer = composer.copy(isPosting = true, errorMessage = null)
-                            scope.launch {
-                                val error = postController.createThread(site, community, composer.title, composer.content)
-                                if (error == null) {
-                                    composer = composer.copy(isPosting = false)
-                                    onPosted()
-                                } else {
-                                    composer = composer.copy(isPosting = false, errorMessage = error.message)
-                                }
-                            }
-                        },
-                    ) { Text(stringResource(R.string.thread_button)) }
-                }
-            }
-        },
-    ) { padding ->
-        ForumBackground(Modifier.padding(padding)) {
-            LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { FeedflowProgressLine(composer.isPosting) }
-                item { HeaderCard(stringResource(R.string.new_thread), "${site.displayName} · ${community.name}", site) }
-                item {
-                    ForumCard {
-                        OutlinedTextField(
-                            value = composer.title,
-                            onValueChange = { composer = composer.copy(title = it, errorMessage = null) },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(stringResource(R.string.thread_title)) },
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        OutlinedTextField(
-                            value = composer.content,
-                            onValueChange = { composer = composer.copy(content = it, errorMessage = null) },
-                            modifier = Modifier.fillMaxWidth().height(180.dp),
-                            placeholder = { Text(stringResource(R.string.share_thoughts)) },
-                        )
-                        composer.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                        Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.attachments_header), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.weight(1f))
-                            TextButton(onClick = { imagePicker.launch("image/*") }) {
-                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Text(stringResource(R.string.add_images))
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            val attachmentSlots: List<Uri?> = selectedImages.map<Uri, Uri?> { it }.ifEmpty { listOf(null, null, null) }
-                            attachmentSlots.forEach { uri ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(120.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    if (uri != null) {
-                                        AndroidView(
-                                            modifier = Modifier.fillMaxSize(),
-                                            factory = { context ->
-                                                android.widget.ImageView(context).apply {
-                                                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-                                                    setImageURI(uri)
-                                                }
-                                            },
-                                            update = { imageView -> imageView.setImageURI(uri) },
-                                        )
-                                        IconButton(
-                                            onClick = { selectedImages = selectedImages - uri },
-                                            modifier = Modifier.align(Alignment.TopEnd).size(28.dp),
-                                        ) {
-                                            Icon(FeedflowIconMap.symbol("xmark.circle.fill"), contentDescription = stringResource(R.string.remove_attachment), modifier = Modifier.size(18.dp))
-                                        }
-                                    } else {
-                                        Icon(Icons.Default.Image, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                            }
-                        }
-                        HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            TextButton(onClick = { appendContent("**bold**") }) { Text("B", fontWeight = FontWeight.Bold) }
-                            TextButton(onClick = { appendContent("*italic*") }) { Text("I", fontWeight = FontWeight.SemiBold) }
-                            IconButton(onClick = { appendContent("[LINK:https://|Title]") }) { Icon(FeedflowIconMap.symbol("link.circle.fill"), contentDescription = stringResource(R.string.link)) }
-                            IconButton(onClick = { composer = composer.copy(content = FormattingToolbar.bullet(composer.content.ifBlank { "List item" })) }) {
-                                Icon(FeedflowIconMap.symbol("list.bullet.rectangle.portrait.fill"), contentDescription = stringResource(R.string.bullet_list))
-                            }
-                            Spacer(Modifier.weight(1f))
-                            Text(stringResource(R.string.word_count, composer.wordCount), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -3058,18 +2911,10 @@ private fun FloatingThreadNavigationButton(icon: ImageVector, label: String, ena
 @Composable
 private fun ThreadDetailActionToolbar(
     loadedFromCache: Boolean,
-    canDelete: Boolean,
     isBookmarked: Boolean,
-    isSpeaking: Boolean,
-    onBack: () -> Unit,
     onHome: () -> Unit,
-    onRefresh: () -> Unit,
     onToggleBookmark: () -> Unit,
-    onAiSummary: () -> Unit,
-    onSpeak: () -> Unit,
-    onShare: () -> Unit,
     onTheme: () -> Unit,
-    onDelete: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -3083,7 +2928,6 @@ private fun ThreadDetailActionToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
         Spacer(Modifier.weight(1f))
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -3100,19 +2944,17 @@ private fun ThreadDetailActionToolbar(
                     modifier = Modifier.size(14.dp),
                 )
             }
-            if (canDelete) CircularToolbarIcon(FeedflowIconMap.symbol("trash.fill"), stringResource(R.string.delete), onDelete)
-            CircularToolbarIcon(FeedflowIconMap.symbol("arrow.triangle.2.circlepath"), stringResource(R.string.refresh), onRefresh)
             CircularToolbarIcon(
                 icon = if (isBookmarked) FeedflowIconMap.symbol("bookmark.fill") else FeedflowIconMap.symbol("bookmark"),
                 label = stringResource(R.string.bookmark),
                 onClick = onToggleBookmark,
             )
-            CircularToolbarIcon(FeedflowIconMap.symbol("sparkles.rectangle.stack.fill"), stringResource(R.string.ai_summary_action), onAiSummary)
             CircularToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), stringResource(R.string.theme), onTheme)
             CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.select_community), onHome)
         }
     }
 }
+
 
 private fun threadListStatusSubtitle(site: ForumSite, community: Community, recommendationsLabel: String): String =
     if (site == ForumSite.Zhihu && community.id == "recommend") {
@@ -3390,7 +3232,7 @@ private fun HomeToolbar(
             Row {
                 ToolbarIcon(FeedflowIconMap.symbol("square.grid.2x2.fill"), "Communities", onCommunityConfig)
                 ToolbarIcon(FeedflowIconMap.symbol("circle.lefthalf.filled"), "Theme", onTheme)
-                TextButton(onClick = onLanguage, modifier = Modifier.size(44.dp)) {
+                TextButton(onClick = onLanguage, modifier = Modifier.size(52.dp)) {
                     Text(if (language == "en") "EN" else "中", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 }
             }
@@ -3403,11 +3245,14 @@ private fun ScreenToolbar(
     title: String,
     onBack: () -> Unit,
     onHome: () -> Unit,
+    showBack: Boolean = true,
     actions: @Composable () -> Unit = {},
 ) {
     ToolbarCard {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
+            if (showBack) {
+                CircularToolbarIcon(FeedflowIconMap.symbol("chevron.left"), stringResource(R.string.back), onBack)
+            }
             Text(title, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
             actions()
             CircularToolbarIcon(FeedflowIconMap.symbol("house.fill"), stringResource(R.string.home), onHome)
@@ -3422,7 +3267,7 @@ private fun ToolbarIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
             imageVector = icon,
             contentDescription = label,
             tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(24.dp),
         )
     }
 }
@@ -3432,12 +3277,12 @@ private fun CircularToolbarIcon(icon: ImageVector, label: String, onClick: () ->
     IconButton(onClick = onClick) {
         Box(
             modifier = Modifier
-                .size(34.dp)
+                .size(40.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+            Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
         }
     }
 }
@@ -3445,11 +3290,11 @@ private fun CircularToolbarIcon(icon: ImageVector, label: String, onClick: () ->
 @Composable
 private fun ToolbarCard(content: @Composable () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        content = { Box(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) { content() } },
+        content = { Box(Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) { content() } },
     )
 }
 
