@@ -45,6 +45,7 @@ class AuthSessionCoordinator(
         if (site == ForumSite.FourD4Y) {
             store.removeSetting("4d4y_sid")
             store.removeSetting("detected_4d4y_username")
+            store.removeSetting("login_4d4y_username")
         }
         store.replaceCookies(site.serviceId, upgraded)
         store.clearCachedTopicsForService(site.serviceId)
@@ -74,6 +75,7 @@ class AuthSessionCoordinator(
         if (site == ForumSite.FourD4Y) {
             store.removeSetting("4d4y_sid")
             store.removeSetting("detected_4d4y_username")
+            store.removeSetting("login_4d4y_username")
         }
         rejectedSignatures.remove(site)
     }

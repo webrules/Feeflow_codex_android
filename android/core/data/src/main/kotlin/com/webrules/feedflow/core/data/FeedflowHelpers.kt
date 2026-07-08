@@ -618,22 +618,23 @@ object HackerNewsContentCleaner {
         }
 
         fun parseCategories(html: String): List<Community> =
-            Regex("""<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                .findAll(html)
+            // Collapse newlines to avoid DOT_MATCHES_ALL cross-tag greediness,
+            // then use non-greedy capture without DOT_MATCHES_ALL for safe single-line matching
+            Regex("""<a\b[^>]*?href=["']([^"']*forumdisplay\.php\?[^"']*fid=(\d+)[^"']*)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE))
+                .findAll(html.replace("\n", " ").replace("\r", " "))
                 .mapNotNull { match ->
-                    val href = match.groupValues[1].decodeHtmlEntities()
-                    if (!href.contains("forumdisplay", ignoreCase = true)) return@mapNotNull null
-                    val fid = Regex("""(?:^|[?&])fid=(\d+)""", RegexOption.IGNORE_CASE)
-                        .find(href)
-                        ?.groupValues
-                        ?.get(1)
-                        ?: return@mapNotNull null
-                    val name = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
+                    val fid = match.groupValues[2]
+                    if (fid.isBlank()) return@mapNotNull null
+                    val name = match.groupValues[3].stripTags().decodeHtmlEntities().trim()
+                    if (name.isBlank()) return@mapNotNull null
                     fid to name
                 }
                 .groupBy({ it.first }, { it.second })
                 .mapNotNull { (fid, names) ->
-                    val name = names.firstOrNull { n -> n.isNotBlank() && n != "4D4Y" } ?: return@mapNotNull null
+                    // Pick best name: prefer non-"4D4Y", non-numeric, meaningful names
+                    val name = names.firstOrNull { n -> n.isNotBlank() && n != "4D4Y" && !n.all { it.isDigit() } }
+                        ?: names.firstOrNull { n -> n.isNotBlank() && n != "4D4Y" }
+                        ?: return@mapNotNull null
                     Community(
                         id = fid,
                         name = name,
@@ -714,7 +715,7 @@ object HackerNewsContentCleaner {
         }
 
         private fun parseThreadLinksFallback(html: String, community: Community): List<FeedThread> =
-            Regex("""<a\b[^>]*href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=(\d+)[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            Regex("""<a\b[^>]*?href=["'](?:https?://(?:www\.)?4d4y\.com/forum/)?viewthread\.php\?[^"']*?\btid=(\d+)[^"']*["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .findAll(html)
                 .mapNotNull { match ->
                     val tid = match.groupValues[1]
@@ -1025,6 +1026,37 @@ object HackerNewsContentCleaner {
                 extractAvatar(authorBlock.orEmpty()).takeIf { it.isNotBlank() }?.let { return it }
             }
             return extractAvatar(html)
+        }
+
+        fun parseSearch(body: String): SearchResult {
+            val root = ZhihuJson.parse(body)?.obj() ?: return SearchResult(emptyList(), false)
+            val total = root.int("total") ?: 0
+            val hits = root.arr("hits") ?: return SearchResult(emptyList(), false)
+            val seen = mutableSetOf<String>()
+            val threads = hits.mapNotNull { element ->
+                val obj = element.obj() ?: return@mapNotNull null
+                val source = obj.obj("_source") ?: return@mapNotNull null
+                val id = source.longId("id")?.toString() ?: return@mapNotNull null
+                if (!seen.add(id)) return@mapNotNull null
+                val title = source.str("title")?.decodeHtmlEntities()?.trim()?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val content = source.str("content")?.decodeHtmlEntities()?.trim().orEmpty()
+                val member = source.str("member")?.trim().orEmpty()
+                val replies = source.int("replies") ?: 0
+                val created = source.str("created").orEmpty()
+                FeedThread(
+                    id = id,
+                    title = title,
+                    content = content,
+                    author = User(member, member.ifBlank { "V2EX" }, "person.circle"),
+                    community = Community("v2ex", "V2EX", "", "V2EX", 0, 0),
+                    timeAgo = created.take(10),
+                    likeCount = 0,
+                    commentCount = replies,
+                )
+            }
+            val from = root.int("from") ?: 0
+            return SearchResult(threads, from + threads.size < total)
         }
 
         fun cleanContent(html: String): String =

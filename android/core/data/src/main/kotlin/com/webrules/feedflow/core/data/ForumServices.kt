@@ -373,6 +373,21 @@ class V2exService(
         return ThreadDetailResult(thread, replies, 1)
     }
 
+    override suspend fun searchThreads(query: String, page: Int): SearchResult {
+        val encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
+        val from = (page - 1) * 20
+        val json = runCatching {
+            httpClient.get(
+                "https://www.sov2ex.com/api/search?q=$encoded&size=20&from=$from",
+                emptyList(),
+                mapOf(
+                    "User-Agent" to "Mozilla/5.0 (Linux; Android 14; Pixel 7a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36",
+                ),
+            )
+        }.getOrNull() ?: return SearchResult(emptyList(), false)
+        return V2exParser.parseSearch(json)
+    }
+
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
@@ -553,6 +568,8 @@ class FourD4YService(
     private var currentFormHash: String? = null
     override val currentUsername: String?
         get() = store?.getSetting("detected_4d4y_username")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: store?.getSetting("login_4d4y_username")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: store?.getEncryptedSetting("login_${id}_username")?.trim()?.takeIf { it.isNotEmpty() }
 
     override suspend fun restoreSession(): Boolean {
         val cookies = store?.getCookies(id).orEmpty()
@@ -560,9 +577,17 @@ class FourD4YService(
         if (!siteCookies.any { SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(siteCookies) }) {
             return false
         }
-        val html = runCatching { fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies) }.getOrNull() ?: return false
-        rememberAuthenticatedPageArtifacts(html)
-        return validateSessionHtml(html)
+        // Try index page first, then fall back to Discovery page
+        val urls = listOf(
+            withSid("https://www.4d4y.com/forum/index.php", cookies),
+            withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=2", cookies),
+        )
+        for (url in urls) {
+            val html = runCatching { fetch(url, cookies) }.getOrNull() ?: continue
+            rememberAuthenticatedPageArtifacts(html)
+            if (validateSessionHtml(html)) return true
+        }
+        return false
     }
 
     override fun canCreateThread(community: Community): Boolean = true
@@ -570,9 +595,20 @@ class FourD4YService(
 
     override suspend fun fetchCategories(): List<Community> {
         val cookies = authCookies()
+        return fetchCategoriesWithRetry(cookies, 0)
+    }
+
+    private suspend fun fetchCategoriesWithRetry(cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>, attempt: Int): List<Community> {
         val html = fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies)
         rememberAuthenticatedPageArtifacts(html)
-        return FourD4YParser.parseCategories(html).withProtectedDiscoveryIfAvailable(cookies)
+        val categories = FourD4YParser.parseCategories(html).withProtectedDiscoveryIfAvailable(cookies)
+        if (categories.isNotEmpty() || attempt >= 2) return categories
+        // Retry: refresh session state by re-fetching the index page
+        val refreshedHtml = fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies)
+        rememberAuthenticatedPageArtifacts(refreshedHtml)
+        val retried = FourD4YParser.parseCategories(refreshedHtml).withProtectedDiscoveryIfAvailable(cookies)
+        if (retried.isNotEmpty()) return retried
+        throw FeedflowError.AuthRequired
     }
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
@@ -666,27 +702,45 @@ class FourD4YService(
         val forums = FourD4YParser.parseCategories(html)
         val lower = html.lowercase()
         val hasLogout = lower.contains("action=logout") || lower.contains("action%3dlogout") || html.contains("退出")
-        val hasLogin = (lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
+        val hasLogin = (lower.contains("logging.php?action=login") || lower.contains("action=login") || lower.contains("action%3dlogin")) && !hasLogout
         val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
         val hasDiscovery = forums.any { it.name == "Discovery" }
-        return forums.isNotEmpty() && !hasLogin && !isChallenge && (hasLogout || hasDiscovery)
+        // Strong auth indicators: user-specific pages only visible when logged in
+        val hasUserPanel = lower.contains("my.php") || lower.contains("memcp.php") || lower.contains("pm.php")
+        val hasCredits = lower.contains("积分") || lower.contains("帖子") || lower.contains("credits", ignoreCase = true)
+        val hasAvatar = lower.contains("avatar") || html.contains("头像")
+        val hasUsernameDisplay = Regex("""欢迎您回来|space\.php\?uid=\d+|个人中心""").containsMatchIn(html)
+        val strongAuth = hasLogout || hasDiscovery || hasUserPanel || (hasCredits && hasAvatar) || hasUsernameDisplay
+        return forums.isNotEmpty() && !hasLogin && !isChallenge && strongAuth
     }
 
     private suspend fun List<Community>.withProtectedDiscoveryIfAvailable(
         cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>,
     ): List<Community> {
-        if (any { it.id == "2" || it.name.equals("Discovery", ignoreCase = true) }) return this
+        // Find Discovery by name from existing categories
+        val discoveryId = firstOrNull { it.name.equals("Discovery", ignoreCase = true) }?.id
+        if (discoveryId != null) return this
         val hasAuthCookies = cookies.any { it.domain.contains("4d4y.com") && (it.name.contains("auth", ignoreCase = true) || it.name.contains("member", ignoreCase = true) || it.name.contains("login", ignoreCase = true)) }
         if (!hasAuthCookies && !SiteLoginConfig.forSite(ForumSite.FourD4Y)!!.hasAuthenticatedSession(cookies)) return this
-        val html = runCatching {
-            fetch(withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=2", cookies), cookies)
-        }.getOrNull() ?: return this
-        val lower = html.lowercase()
-        val hasLogin = lower.contains("action=login") || lower.contains("logging.php?action=login") || html.contains("未登录")
-        val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
-        if (hasLogin || isChallenge) return this
-        rememberAuthenticatedPageArtifacts(html)
-        return this + Community("2", "Discovery", "", "4D4Y", 0, 0)
+        // Try candidate Discovery forum IDs dynamically
+        val candidateFids = listOf("2", "16", "31", "50")
+        for (fid in candidateFids) {
+            val html = runCatching {
+                fetch(withSid("https://www.4d4y.com/forum/forumdisplay.php?fid=$fid", cookies), cookies)
+            }.getOrNull() ?: continue
+            val lower = html.lowercase()
+            val hasLogin = lower.contains("action=login") || lower.contains("logging.php?action=login") || html.contains("未登录")
+            val isChallenge = lower.contains("cloudflare") || lower.contains("checking your browser")
+            if (hasLogin || isChallenge) continue
+            // Verify this is actually Discovery by checking page title or breadcrumb
+            val isDiscovery = lower.contains(">discovery</a>", ignoreCase = true) ||
+                lower.contains(">Discovery</") ||
+                html.contains("Discovery", ignoreCase = true) && lower.contains("forumdisplay.php?fid=$fid")
+            if (!isDiscovery) continue
+            rememberAuthenticatedPageArtifacts(html)
+            return this + Community(fid, "Discovery", "", "4D4Y", 0, 0)
+        }
+        return this
     }
 
     private fun rememberAuthenticatedPageArtifacts(html: String) {
@@ -700,15 +754,25 @@ class FourD4YService(
     private fun rememberLoggedInUsername(html: String) {
         val lower = html.lowercase()
         if (!lower.contains("action=logout") && !lower.contains("action%3dlogout") && !html.contains("退出")) return
-        parseLoggedInUsername(html)?.let { store?.saveSetting("detected_4d4y_username", it) }
+        parseLoggedInUsername(html)?.let { username ->
+            store?.saveSetting("detected_4d4y_username", username)
+            store?.saveSetting("login_4d4y_username", username)
+        }
     }
 
     override suspend fun postComment(topicId: String, categoryId: String, content: String) {
         val cookies = store?.getCookies(id).orEmpty()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
         if (currentFormHash == null) {
-            val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId", cookies), cookies)
-            currentFormHash = extractFormHash(formHtml)
+            // Retry form hash extraction once with refreshed session
+            for (attempt in 0..1) {
+                val formHtml = fetch(withSid("https://www.4d4y.com/forum/post.php?action=reply&fid=$categoryId&tid=$topicId", cookies), cookies)
+                currentFormHash = extractFormHash(formHtml)
+                if (currentFormHash != null) break
+                if (attempt == 0) {
+                    rememberAuthenticatedPageArtifacts(fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies))
+                }
+            }
         }
         val formHash = currentFormHash ?: throw FeedflowError.Parsing(id, "replyFormhash", "no formhash available")
         val response = httpClient.post(
