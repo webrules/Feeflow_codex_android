@@ -10,11 +10,14 @@ sealed interface ContentBlock {
     data class Heading(val level: Int, val segments: List<LinkSegment>) : ContentBlock
     data class Quote(val segments: List<LinkSegment>) : ContentBlock
     data class Image(val url: String, val normalizedKey: String) : ContentBlock
+    data object HorizontalRule : ContentBlock
 }
 
 sealed interface LinkSegment {
     data class Plain(val text: String) : LinkSegment
     data class Link(val url: String, val title: String) : LinkSegment
+    data class Bold(val inner: List<LinkSegment>) : LinkSegment
+    data class Colored(val color: String, val inner: List<LinkSegment>) : LinkSegment
 }
 
 object AvatarRenderingPolicy {
@@ -94,37 +97,97 @@ object FeedflowContentRenderer {
                 is ContentBlock.Heading -> block.segments.onlyBlankPlainText()
                 is ContentBlock.Quote -> block.segments.onlyBlankPlainText()
                 is ContentBlock.Image -> false
+                is ContentBlock.HorizontalRule -> false
             }
         }
     }
 
     fun parseLinkedText(text: String): List<LinkSegment> {
         val segments = mutableListOf<LinkSegment>()
+        parseInlineFormatting(text, segments)
+        return mergePlain(segments)
+    }
+
+    private fun parseInlineFormatting(text: String, segments: MutableList<LinkSegment>) {
+        val openRegex = Regex("""\[(BOLD|COLOR:#[0-9a-fA-F]{3,8}|LINK:)""")
         var cursor = 0
         while (cursor < text.length) {
-            val start = text.indexOf("[LINK:", cursor)
-            if (start == -1) {
+            val match = openRegex.find(text, cursor) ?: run {
                 addRawUrlSegments(text.substring(cursor), segments)
-                break
+                return
             }
-            addRawUrlSegments(text.substring(cursor, start), segments)
-            val pipe = text.indexOf('|', start + 6)
-            if (pipe == -1) {
-                addRawUrlSegments(text.substring(start), segments)
-                break
+            if (match.range.first > cursor) {
+                addRawUrlSegments(text.substring(cursor, match.range.first), segments)
             }
-            val close = findMarkerClose(text, pipe + 1)
-            if (close == -1) {
-                addRawUrlSegments(text.substring(start), segments)
-                break
+            when {
+                match.groupValues[1] == "BOLD" -> {
+                    val tagEnd = match.range.last + 1
+                    val close = findMatchingClose(text, tagEnd, "BOLD", "/BOLD")
+                    if (close == -1) {
+                        addRawUrlSegments(text.substring(match.range.first), segments)
+                        return
+                    }
+                    val innerText = text.substring(tagEnd, close)
+                    val inner = parseLinkedText(innerText)
+                    segments += LinkSegment.Bold(inner)
+                    cursor = close + 6 // [/BOLD]
+                }
+                match.groupValues[1].startsWith("COLOR:") -> {
+                    val color = match.groupValues[1].substringAfter("COLOR:")
+                    val tagEnd = match.range.last + 1
+                    val close = findMatchingClose(text, tagEnd, "COLOR:", "/COLOR")
+                    if (close == -1) {
+                        addRawUrlSegments(text.substring(match.range.first), segments)
+                        return
+                    }
+                    val innerText = text.substring(tagEnd, close)
+                    val inner = parseLinkedText(innerText)
+                    segments += LinkSegment.Colored(color, inner)
+                    cursor = close + 7 // [/COLOR]
+                }
+                match.groupValues[1] == "LINK:" -> {
+                    val start = match.range.first
+                    val pipe = text.indexOf('|', start + 6)
+                    if (pipe == -1) {
+                        addRawUrlSegments(text.substring(start), segments)
+                        return
+                    }
+                    val close = findMarkerClose(text, pipe + 1)
+                    if (close == -1) {
+                        addRawUrlSegments(text.substring(start), segments)
+                        return
+                    }
+                    segments += LinkSegment.Link(
+                        url = text.substring(start + 6, pipe),
+                        title = text.substring(pipe + 1, close),
+                    )
+                    cursor = close + 1
+                }
+                else -> {
+                    addRawUrlSegments(text.substring(match.range.first), segments)
+                    return
+                }
             }
-            segments += LinkSegment.Link(
-                url = text.substring(start + 6, pipe),
-                title = text.substring(pipe + 1, close),
-            )
-            cursor = close + 1
         }
-        return mergePlain(segments)
+    }
+
+    private fun findMatchingClose(text: String, searchFrom: Int, openPrefix: String, closeTag: String): Int {
+        var pos = searchFrom
+        var depth = 1
+        while (pos < text.length) {
+            val nextOpen = text.indexOf("[$openPrefix", pos)
+            val nextClose = text.indexOf("[$closeTag]", pos)
+            if (nextClose == -1) return -1
+            if (nextOpen != -1 && nextOpen < nextClose) {
+                depth += 1
+                pos = nextOpen + openPrefix.length + 2
+            } else {
+                depth -= 1
+                if (depth == 0) return nextClose
+                pos = nextClose + closeTag.length + 2
+            }
+        }
+        return -1
     }
 
     fun singleLinkOrNull(text: String): LinkSegment.Link? {
@@ -160,18 +223,56 @@ object FeedflowContentRenderer {
     private fun addPlainBlock(text: String, blocks: MutableList<ContentBlock>) {
         if (text.isBlank()) return
         val headingRegex = Regex("""(?m)^\s*(#{1,6})\s+(.+?)\s*$""")
+        val hrRegex = Regex("""\[HR]""")
+        val headingPositions = headingRegex.findAll(text).map { it.range.first to it }.toList()
+        val hrPositions = hrRegex.findAll(text).map { it.range.first to it }.toList()
+        val allBreaks = (headingPositions.map { (pos, m) -> Triple(pos, "heading", m as Any) } +
+            hrPositions.map { (pos, m) -> Triple(pos, "hr", m as Any) }).sortedBy { it.first }
         var cursor = 0
-        headingRegex.findAll(text).forEach { match ->
-            val before = text.substring(cursor, match.range.first).trim()
-            if (before.isNotBlank()) blocks += ContentBlock.Text(parseLinkedText(before))
-            blocks += ContentBlock.Heading(
-                level = match.groupValues[1].length,
-                segments = parseLinkedText(match.groupValues[2].trim()),
-            )
-            cursor = match.range.last + 1
+        for ((_, type, matchObj) in allBreaks) {
+            if (type == "heading") {
+                val match = matchObj as MatchResult
+                if (match.range.first < cursor) continue
+                val before = text.substring(cursor, match.range.first).trim()
+                if (before.isNotBlank()) addInlineBlocks(before, blocks)
+                blocks += ContentBlock.Heading(
+                    level = match.groupValues[1].length,
+                    segments = parseLinkedText(match.groupValues[2].trim()),
+                )
+                cursor = match.range.last + 1
+            } else {
+                val match = matchObj as MatchResult
+                if (match.range.first < cursor) continue
+                val before = text.substring(cursor, match.range.first).trim()
+                if (before.isNotBlank()) addInlineBlocks(before, blocks)
+                blocks += ContentBlock.HorizontalRule
+                cursor = match.range.last + 1
+            }
         }
         val remaining = text.substring(cursor).trim()
-        if (remaining.isNotBlank()) blocks += ContentBlock.Text(parseLinkedText(remaining))
+        if (remaining.isNotBlank()) addInlineBlocks(remaining, blocks)
+    }
+
+    private fun addInlineBlocks(text: String, blocks: MutableList<ContentBlock>) {
+        val hrRegex = Regex("""\[HR]""")
+        var cursor = 0
+        hrRegex.findAll(text).forEach { match ->
+            val before = text.substring(cursor, match.range.first)
+            addParagraphs(before, blocks)
+            blocks += ContentBlock.HorizontalRule
+            cursor = match.range.last + 1
+        }
+        addParagraphs(text.substring(cursor), blocks)
+    }
+
+    private fun addParagraphs(text: String, blocks: MutableList<ContentBlock>) {
+        val paragraphs = text.split(Regex("""\n{2,}"""))
+        paragraphs.forEach { paragraph ->
+            val trimmed = paragraph.trim()
+            if (trimmed.isNotBlank()) {
+                blocks += ContentBlock.Text(parseLinkedText(trimmed))
+            }
+        }
     }
 
     private fun addRawUrlSegments(text: String, segments: MutableList<LinkSegment>) {
@@ -209,5 +310,12 @@ object FeedflowContentRenderer {
         }
 
     private fun List<LinkSegment>.onlyBlankPlainText(): Boolean =
-        all { it is LinkSegment.Plain && it.text.isBlank() }
+        all { segment ->
+            when (segment) {
+                is LinkSegment.Plain -> segment.text.isBlank()
+                is LinkSegment.Link -> false
+                is LinkSegment.Bold -> segment.inner.onlyBlankPlainText()
+                is LinkSegment.Colored -> segment.inner.onlyBlankPlainText()
+            }
+        }
 }
