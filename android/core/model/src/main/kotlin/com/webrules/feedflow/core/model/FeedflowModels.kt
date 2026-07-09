@@ -39,6 +39,7 @@ data class Comment(
     val timeAgo: String,
     val likeCount: Int,
     val replies: List<Comment>? = null,
+    val contentHtml: String? = null,
 )
 
 enum class ForumSite(

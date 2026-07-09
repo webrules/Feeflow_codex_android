@@ -27,6 +27,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -453,7 +454,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
         is FeedflowRoute.Communities -> {
             var refreshToken by remember(current.site) { mutableStateOf(0) }
             var content by remember(current.site) { mutableStateOf(appStateController.communities(current.site)) }
-            LaunchedEffect(current.site, refreshToken) {
+            LaunchedEffect(current.site, refreshToken, loginRevision) {
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshCommunities(current.site)
             }
@@ -481,7 +482,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             var nextPage by remember(current.site, current.community.id) { mutableStateOf(2) }
             var canLoadMoreTopics by remember(current.site, current.community.id) { mutableStateOf(false) }
             var isLoadingMoreTopics by remember(current.site, current.community.id) { mutableStateOf(false) }
-            LaunchedEffect(current.site, current.community.id, refreshToken) {
+            LaunchedEffect(current.site, current.community.id, refreshToken, loginRevision) {
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshThreads(current.site, current.community)
                 nextPage = 2
@@ -1159,9 +1160,6 @@ private fun ThreadDetailScreen(
         }
         context.startActivity(android.content.Intent.createChooser(sendIntent, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
-    val firstImageUrl = remember(thread.content, renderedComments) {
-        firstImageUrl(thread.content + "\n" + renderedComments.joinToString("\n") { it.content })
-    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
@@ -1326,7 +1324,7 @@ private fun ThreadDetailScreen(
                             Text(thread.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(10.dp))
                             if (thread.contentHtml != null) {
-                                HtmlContent(thread.contentHtml.orEmpty())
+                                HtmlContent(thread.contentHtml.orEmpty(), onImageClick = onOpenImage)
                             } else {
                                 ParsedContent(
                                     content = thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) },
@@ -1334,9 +1332,6 @@ private fun ThreadDetailScreen(
                                     onLinkClick = onOpenLink,
                                     useAccentLinkColor = ThreadDetailRenderingPolicy.usesAccentLinkColor(site),
                                 )
-                            }
-                            firstImageUrl?.let { imageUrl ->
-                                TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
                             }
                             if (site != ForumSite.Rss) thread.tags.orEmpty().takeIf { it.isNotEmpty() }?.let { tags ->
                                 Spacer(Modifier.height(10.dp))
@@ -1354,6 +1349,7 @@ private fun ThreadDetailScreen(
                                 hideAvatar = site == ForumSite.HackerNews,
                                 onLinkClick = onOpenLink,
                                 useAccentLinkColor = ThreadDetailRenderingPolicy.usesAccentLinkColor(site),
+                                onImageClick = onOpenImage,
                                 onReply = {
                                     replyState = replyState.copy(
                                         replyingToCommentId = comment.id,
@@ -2219,7 +2215,9 @@ private fun WebLoginSheetScreen(
                     factory = { context ->
                         WebView(context).apply {
                             cookieBridge.configure(this)
-                            config?.let { cookieBridge.installCookies(it, storedCookies) }
+                            // Clear stale WebView cookies to force a fresh login
+                            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                            android.webkit.CookieManager.getInstance().flush()
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     currentUrl = url
@@ -2609,6 +2607,7 @@ private fun CommentRow(comment: Comment) {
         hideAvatar = false,
         onLinkClick = null,
         useAccentLinkColor = true,
+        onImageClick = null,
         onReply = {},
     )
 }
@@ -2620,12 +2619,13 @@ private fun CommentRow(
     hideAvatar: Boolean,
     onLinkClick: ((String, String) -> Unit)? = null,
     useAccentLinkColor: Boolean,
+    onImageClick: ((String) -> Unit)? = null,
     onReply: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
     ) {
         if (!hideAvatar) AvatarView(comment.author.avatar, comment.author.username, sizeDp = 32)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -2640,11 +2640,15 @@ private fun CommentRow(
                 Spacer(Modifier.weight(1f))
                 Text(comment.timeAgo, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            ParsedContent(
-                comment.content,
-                onLinkClick = onLinkClick,
-                useAccentLinkColor = useAccentLinkColor,
-            )
+            if (comment.contentHtml != null) {
+                HtmlContent(comment.contentHtml.orEmpty(), onImageClick = onImageClick)
+            } else {
+                ParsedContent(
+                    comment.content,
+                    onLinkClick = onLinkClick,
+                    useAccentLinkColor = useAccentLinkColor,
+                )
+            }
             if (comment.likeCount > 0) ThreadMetricPill(icon = "hand.thumbsup", text = "${comment.likeCount}")
         }
     }
@@ -3335,17 +3339,6 @@ private fun ForumCard(
     }
 }
 
-private fun firstImageUrl(content: String): String? {
-    val markdownImage = Regex("""!\[[^]]*]\((https?://[^)\s]+)""").find(content)?.groupValues?.get(1)
-    if (markdownImage != null) return markdownImage
-    val htmlImage = Regex("""<img[^>]+src=["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE).find(content)?.groupValues?.get(1)
-    if (htmlImage != null) return htmlImage
-    return Regex("""https?://\S+\.(?:png|jpe?g|gif|webp)(?:\?\S*)?""", RegexOption.IGNORE_CASE)
-        .find(content)
-        ?.value
-        ?.trimEnd('.', ',', ')', ']')
-}
-
 @Composable
 private fun SiteIcon(site: ForumSite, size: androidx.compose.ui.unit.Dp = 54.dp) {
     Box(
@@ -3469,22 +3462,135 @@ private fun FeedflowProgressLine(visible: Boolean) {
 }
 
 @Composable
-private fun HtmlContent(html: String) {
+private fun HtmlContent(html: String, onImageClick: ((String) -> Unit)? = null) {
     val textColor = MaterialTheme.colorScheme.onSurface
     val textSize = 15.sp
-    AndroidView(
-        factory = { context ->
-            AndroidTextView(context).apply {
-                setText(Html.fromHtml(html, Html.FROM_HTML_MODE_COMPACT))
-                movementMethod = LinkMovementMethod.getInstance()
-                setTextColor(textColor.toArgb())
-                this.textSize = textSize.value
-                setLineSpacing(0f, 1.4f)
-                setPadding(0, 4, 0, 4)
+    val isDark = isSystemInDarkTheme()
+    val segments = remember(html) { splitHtmlSegments(html) }
+    Column {
+        segments.forEach { seg ->
+            when (seg) {
+                is HtmlSeg.Text -> {
+                    if (seg.html.isNotBlank()) {
+                        AndroidView(
+                            factory = { context ->
+                                AndroidTextView(context).apply {
+                                    val spanned = Html.fromHtml(seg.html, Html.FROM_HTML_MODE_COMPACT, null, compactTagHandler)
+                                    val sb = android.text.SpannableStringBuilder(spanned)
+                                    // Collapse 3+ consecutive newlines to 2 (preserving spans)
+                                    val text = sb.toString()
+                                    var i = 0
+                                    val removals = mutableListOf<Pair<Int, Int>>()
+                                    while (i < text.length) {
+                                        if (text[i] == '\n') {
+                                            val start = i
+                                            while (i < text.length && text[i] == '\n') i++
+                                            val count = i - start
+                                            if (count > 2) removals.add(start + 2 to i)
+                                        } else i++
+                                    }
+                                    removals.reversed().forEach { (from, to) -> sb.delete(from, to) }
+                                    // In dark mode, remap dark ForegroundColorSpans to readable colors
+                                    if (isDark) {
+                                        sb.getSpans(0, sb.length, android.text.style.ForegroundColorSpan::class.java).forEach { span ->
+                                            val color = span.foregroundColor
+                                            val r = android.graphics.Color.red(color)
+                                            val g = android.graphics.Color.green(color)
+                                            val b = android.graphics.Color.blue(color)
+                                            val brightness = (r * 299 + g * 587 + b * 114) / 1000
+                                            if (brightness < 80) {
+                                                // Very dark color → light gray
+                                                sb.setSpan(
+                                                    android.text.style.ForegroundColorSpan(android.graphics.Color.argb(255, 200, 200, 200)),
+                                                    sb.getSpanStart(span), sb.getSpanEnd(span), sb.getSpanFlags(span)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    setText(sb)
+                                    movementMethod = LinkMovementMethod.getInstance()
+                                    setTextColor(textColor.toArgb())
+                                    this.textSize = textSize.value
+                                    setLineSpacing(0f, 1.3f)
+                                    setPadding(0, 0, 0, 0)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                is HtmlSeg.Image -> {
+                    coil.compose.AsyncImage(
+                        model = seg.url,
+                        contentDescription = null,
+                        contentScale = ContentScale.FillWidth,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .padding(vertical = 4.dp)
+                            .then(
+                                if (onImageClick != null) Modifier.clickable { onImageClick(seg.url) }
+                                else Modifier
+                            ),
+                    )
+                }
             }
-        },
-        modifier = Modifier.fillMaxWidth(),
-    )
+        }
+    }
+}
+
+// Custom TagHandler that reduces block element spacing
+private val compactTagHandler = object : Html.TagHandler {
+    override fun handleTag(opening: Boolean, tag: String?, output: android.text.Editable?, xmlReader: org.xml.sax.XMLReader?) {
+        if (output == null || tag == null) return
+        when (tag.lowercase()) {
+            "div" -> {
+                // Only add newline on closing to avoid double-spacing
+                if (!opening && output.isNotEmpty() && output.last() != '\n') output.append("\n")
+            }
+            // <br> and <p> are handled natively by Html.fromHtml(FROM_HTML_MODE_COMPACT)
+        }
+    }
+}
+
+private sealed interface HtmlSeg {
+    data class Text(val html: String) : HtmlSeg
+    data class Image(val url: String) : HtmlSeg
+}
+
+private fun splitHtmlSegments(html: String): List<HtmlSeg> {
+    val segments = mutableListOf<HtmlSeg>()
+    val imgRegex = Regex("""<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*/?>""", RegexOption.IGNORE_CASE)
+    var cursor = 0
+    imgRegex.findAll(html).forEach { match ->
+        if (match.range.first > cursor) {
+            val text = html.substring(cursor, match.range.first)
+            val trimmed = trimHtmlSegment(text)
+            if (trimmed.isNotBlank()) segments += HtmlSeg.Text(trimmed)
+        }
+        val url = match.groupValues[1]
+        if (url.isNotBlank()) segments += HtmlSeg.Image(url)
+        cursor = match.range.last + 1
+    }
+    if (cursor < html.length) {
+        val trimmed = trimHtmlSegment(html.substring(cursor))
+        if (trimmed.isNotBlank()) segments += HtmlSeg.Text(trimmed)
+    }
+    return segments
+}
+
+private fun trimHtmlSegment(html: String): String {
+    // Remove leading/trailing <br> tags and whitespace
+    val brTrim = Regex("""^[\s\n]*(?:<br\s*/?>[\s\n]*)+|(?:<br\s*/?>[\s\n]*)+[\s\n]*$""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    var result = html.replace(brTrim, "").trim()
+    // Strip wrapping <p> tags that add unwanted margins
+    result = result.replace(Regex("""^\s*<p[^>]*>\s*""", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\s*</p>\s*$""", RegexOption.IGNORE_CASE), "")
+    // Remove whitespace-only lines between <br> tags
+    result = Regex("""<br>\s+(?=<br>)""", setOf(RegexOption.IGNORE_CASE)).replace(result, "<br>")
+    // Collapse 3+ consecutive <br> to 2 (paragraph break)
+    result = Regex("""(?:<br>\s*){3,}""", setOf(RegexOption.IGNORE_CASE)).replace(result, "<br><br>")
+    return result
 }
 
 @Composable
