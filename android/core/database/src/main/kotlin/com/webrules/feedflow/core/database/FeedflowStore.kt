@@ -357,6 +357,7 @@ object FeedflowPersistenceCodecs {
         thread.tags.orEmpty().joinToString(recordSeparator, transform = ::encodeComponent),
         thread.lastPostTime.orEmpty(),
         thread.lastPosterName.orEmpty(),
+        thread.contentHtml.orEmpty(),
     )
 
     fun decodeThread(value: String): FeedThread {
@@ -374,6 +375,7 @@ object FeedflowPersistenceCodecs {
             tags = fields.getOrElse(9) { "" }.takeIf { it.isNotBlank() }?.split(recordSeparator)?.map(::decodeComponent),
             lastPostTime = fields.getOrElse(10) { "" }.ifBlank { null },
             lastPosterName = fields.getOrElse(11) { "" }.ifBlank { null },
+            contentHtml = fields.getOrElse(12) { "" }.ifBlank { null },
         )
     }
 
@@ -384,6 +386,7 @@ object FeedflowPersistenceCodecs {
         comment.timeAgo,
         comment.likeCount.toString(),
         encodeComments(comment.replies.orEmpty()),
+        comment.contentHtml.orEmpty(),
     )
 
     fun decodeComment(value: String): Comment {
@@ -395,6 +398,7 @@ object FeedflowPersistenceCodecs {
             timeAgo = fields.getOrElse(3) { "" },
             likeCount = fields.getOrElse(4) { "0" }.toIntOrNull() ?: 0,
             replies = decodeComments(fields.getOrElse(5) { "" }).takeIf { it.isNotEmpty() },
+            contentHtml = fields.getOrElse(6) { "" }.ifBlank { null },
         )
     }
 

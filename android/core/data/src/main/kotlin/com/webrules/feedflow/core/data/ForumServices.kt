@@ -616,13 +616,19 @@ class FourD4YService(
         if (store?.getSetting("4d4y_sid").isNullOrBlank() && cookies.none { it.name.equals("sid", ignoreCase = true) }) {
             fetchCategories()
         }
-        val html = fetch(categoryUrl(categoryId, page, cookies), cookies)
+        val url = categoryUrl(categoryId, page, cookies)
+        val html = fetch(url, cookies)
+        // Detect login page responses and throw AuthRequired
+        if (isLoginPageResponse(html)) throw FeedflowError.AuthRequired
         rememberAuthenticatedPageArtifacts(html)
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "4D4Y", 0, 0)
         val threads = FourD4YParser.parseThreadRows(html, community)
         if (threads.isNotEmpty() || page != 1) return threads
-        rememberAuthenticatedPageArtifacts(fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies))
-        return FourD4YParser.parseThreadRows(fetch(categoryUrl(categoryId, page, cookies), cookies), community)
+        val refreshHtml = fetch(withSid("https://www.4d4y.com/forum/index.php", cookies), cookies)
+        rememberAuthenticatedPageArtifacts(refreshHtml)
+        val retryHtml = fetch(categoryUrl(categoryId, page, cookies), cookies)
+        if (isLoginPageResponse(retryHtml)) throw FeedflowError.AuthRequired
+        return FourD4YParser.parseThreadRows(retryHtml, community)
     }
 
     override suspend fun fetchThreadDetail(threadId: String, page: Int): ThreadDetailResult {
@@ -696,6 +702,13 @@ class FourD4YService(
         }
         extractFormHash(html)?.let { currentFormHash = it }
         rememberLoggedInUsername(html)
+    }
+
+    private fun isLoginPageResponse(html: String): Boolean {
+        val lower = html.lowercase()
+        return lower.contains("action=login") && lower.contains("logging.php") ||
+            html.contains("\u672a\u767b\u5f55") ||
+            (lower.contains("logging.php") && lower.contains("action=login") && !lower.contains("action=logout"))
     }
 
     private fun validateSessionHtml(html: String): Boolean {
@@ -955,6 +968,7 @@ class FourD4YService(
                     id = post.id,
                     author = post.author,
                     content = cleanContent(post.rawContent),
+                    contentHtml = cleanContentHtml(post.rawContent),
                     timeAgo = post.timeAgo,
                     likeCount = 0,
                 )
@@ -989,6 +1003,7 @@ class FourD4YService(
                 id = post.id,
                 author = post.author,
                 content = cleanContent(post.rawContent),
+                contentHtml = cleanContentHtml(post.rawContent),
                 timeAgo = post.timeAgo,
                 likeCount = 0,
             )
@@ -1319,7 +1334,15 @@ class FourD4YService(
         fun cleanContent(html: String): String {
             var processed = html
                 .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
-                .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            // Extract image URLs from <ignore_js_op> blocks as plain text
+            processed = Regex("""<ignore_js_op>(.*?)</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { m ->
+                    val inner = m.groupValues[1]
+                    val urls = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).findAll(inner)
+                        .map { it.groupValues[1] }
+                        .joinToString("\n") { "[image: $it]" }
+                    urls.ifEmpty { "" }
+                }
             // Strip small font tags that have NO color attribute (preserve colored font tags)
             processed = Regex("""<font(?![^>]*color\s*=)[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .replace(processed) { match ->
@@ -1349,26 +1372,6 @@ class FourD4YService(
                     "\n[IMAGE:$resolved]\n"
                 }
             }
-            // Convert formatting tags to markers (innermost first, iterate until stable)
-            run {
-                val bOpen = Regex("""<(?:b|strong)(?:\s[^>]*)?>""", setOf(RegexOption.IGNORE_CASE))
-                val bClose = Regex("""</(?:b|strong)>""", setOf(RegexOption.IGNORE_CASE))
-                val fontColor = Regex("""<font[^>]+color\s*=\s*["']?([^"';>\s]+)["']?[^>]*>(.*?)</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                var prev = ""
-                var passes = 0
-                while (processed != prev && passes < 10) {
-                    prev = processed
-                    processed = bOpen.replace(processed, "[BOLD]")
-                    processed = bClose.replace(processed, "[/BOLD]")
-                    processed = fontColor.replace(processed) { m ->
-                        "[COLOR:${m.groupValues[1]}]${m.groupValues[2]}[/COLOR]"
-                    }
-                    passes++
-                }
-            }
-            // Convert <hr> tags to [HR] marker
-            processed = Regex("""<hr[^>]*/?>.*?""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                .replace(processed, "\n[HR]\n")
             processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).replace(processed) { match ->
                 val href = match.groupValues[1].decodeHtmlEntities()
                 val label = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
@@ -1405,7 +1408,24 @@ class FourD4YService(
         fun cleanContentHtml(html: String): String {
             var processed = html
                 .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
-                .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            // Extract <img> tags from <ignore_js_op> blocks, discard other content
+            processed = Regex("""<ignore_js_op>(.*?)</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { m ->
+                    val inner = m.groupValues[1]
+                    val imgs = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).findAll(inner)
+                        .joinToString("") { it.value }
+                    imgs.ifEmpty { "" }
+                }
+            // Remove post edit status notices
+            processed = Regex("""<i\s+class=["']pstatus["'][^>]*>.*?</i>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
+            // Strip trailing wrapper </div> and surrounding whitespace
+            processed = Regex("""\s*</div>\s*$""", setOf(RegexOption.DOT_MATCHES_ALL)).replace(processed, "")
+            // Remove Discuz post signature markers (e.g. "iOS fly ~")
+            processed = Regex("""&nbsp;\s*<font\s+size=["']?1["']?>.*?</font>\s*$""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
+            // Convert &nbsp; to regular space so <br> collapse works correctly
+            processed = processed.replace("&nbsp;", " ").replace("\u00a0", " ")
             // Remove smiley / UI images, resolve relative URLs for content images
             processed = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).replace(processed) { match ->
                 val src = match.groupValues[1]
@@ -1456,9 +1476,13 @@ class FourD4YService(
                 if (href.startsWith("http") || href.startsWith("#") || href.startsWith("javascript:")) m.value
                 else "<a${m.groupValues[1]}https://www.4d4y.com/forum/$href${m.groupValues[3]}>"
             }
-            // Collapse consecutive <br> tags (with optional whitespace/newlines between) into single <br>
-            processed = Regex("""(?:<br\s*/?>[\s\n]*){2,}""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            // Normalize all <br> variants to <br> first
+            processed = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE).replace(processed, "<br>")
+            // Collapse whitespace between consecutive <br> tags, then collapse to single <br>
+            processed = Regex("""(?:<br>\s*){2,}""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .replace(processed, "<br>")
+            // Remove lines containing only whitespace between <br> tags
+            processed = Regex("""<br>\s+(?=<br>)""", RegexOption.IGNORE_CASE).replace(processed, "<br>")
             // Remove empty paragraphs (including those with only &nbsp; or whitespace)
             processed = Regex("""<p[^>]*>(?:\s|&nbsp;|\u00a0)*</p>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .replace(processed, "")
@@ -1468,6 +1492,22 @@ class FourD4YService(
             // Remove <br> immediately before or after <hr>
             processed = Regex("""<br\s*/?>\s*<hr|<hr[^>]*/?>\s*<br\s*/?>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .replace(processed) { m -> if (m.value.contains("<hr")) m.value.replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "") else m.value }
+            // Remove <br> immediately before blockquote divs
+            processed = Regex("""(?:<br\s*/?>\s*)+(?=\s*<div\s+style=["']border-left)""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
+            // Remove trailing <br> tags and whitespace at the end of content
+            processed = processed.replace(Regex("""[\s\n]*(?:<br\s*/?>[\s\n]*)+$""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            // Remove leading <br> tags and whitespace at the start of content
+            processed = processed.replace(Regex("""^[\s\n]*(?:<br\s*/?>[\s\n]*)+""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            // Replace <p> boundaries with <br> to avoid Html.fromHtml default margins
+            processed = Regex("""</p>\s*\n*\s*<p[^>]*>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "<br><br>")
+            processed = Regex("""^\s*<p[^>]*>""", RegexOption.IGNORE_CASE).replace(processed, "")
+            processed = Regex("""</p>\s*$""", RegexOption.IGNORE_CASE).replace(processed, "")
+            // Final trim: remove leading/trailing whitespace and stray <br>
+            processed = processed.trim()
+            processed = Regex("""^(?:<br>\s*)+""", RegexOption.IGNORE_CASE).replace(processed, "")
+            processed = Regex("""(?:\s*<br>)+$""", RegexOption.IGNORE_CASE).replace(processed, "")
             return """<div style="line-height:1.6;">$processed</div>"""
         }
 
