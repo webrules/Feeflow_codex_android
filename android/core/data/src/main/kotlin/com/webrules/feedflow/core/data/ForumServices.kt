@@ -943,6 +943,7 @@ class FourD4YService(
                 id = threadId,
                 title = title,
                 content = if (page == 1) cleanContent(mainPost.rawContent) else "",
+                contentHtml = if (page == 1) cleanContentHtml(mainPost.rawContent) else null,
                 author = if (page == 1) mainPost.author else User("0", "", ""),
                 community = community,
                 timeAgo = if (page == 1) mainPost.timeAgo else "",
@@ -976,6 +977,7 @@ class FourD4YService(
             id = threadId,
             title = title,
             content = if (page == 1) cleanContent(mainPost.rawContent) else "",
+            contentHtml = if (page == 1) cleanContentHtml(mainPost.rawContent) else null,
             author = if (page == 1) mainPost.author else User("0", "", ""),
             community = community,
             timeAgo = if (page == 1) mainPost.timeAgo else "",
@@ -1318,7 +1320,8 @@ class FourD4YService(
             var processed = html
                 .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
                 .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
-            processed = Regex("""<font[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            // Strip small font tags that have NO color attribute (preserve colored font tags)
+            processed = Regex("""<font(?![^>]*color\s*=)[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                 .replace(processed) { match ->
                     val size = match.groupValues[1].toIntOrNull() ?: 99
                     if (size <= 4) "" else match.value
@@ -1328,7 +1331,7 @@ class FourD4YService(
                     val inner = match.groupValues[1]
                     val cleaned = Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]*>.*?</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                         .replace(inner, "")
-                    val fontCleaned = Regex("""<font[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    val fontCleaned = Regex("""<font(?![^>]*color\s*=)[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>.*?</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
                         .replace(cleaned) { fm ->
                             val sz = fm.groupValues[1].toIntOrNull() ?: 99
                             if (sz <= 4) "" else fm.value
@@ -1346,6 +1349,26 @@ class FourD4YService(
                     "\n[IMAGE:$resolved]\n"
                 }
             }
+            // Convert formatting tags to markers (innermost first, iterate until stable)
+            run {
+                val bOpen = Regex("""<(?:b|strong)(?:\s[^>]*)?>""", setOf(RegexOption.IGNORE_CASE))
+                val bClose = Regex("""</(?:b|strong)>""", setOf(RegexOption.IGNORE_CASE))
+                val fontColor = Regex("""<font[^>]+color\s*=\s*["']?([^"';>\s]+)["']?[^>]*>(.*?)</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                var prev = ""
+                var passes = 0
+                while (processed != prev && passes < 10) {
+                    prev = processed
+                    processed = bOpen.replace(processed, "[BOLD]")
+                    processed = bClose.replace(processed, "[/BOLD]")
+                    processed = fontColor.replace(processed) { m ->
+                        "[COLOR:${m.groupValues[1]}]${m.groupValues[2]}[/COLOR]"
+                    }
+                    passes++
+                }
+            }
+            // Convert <hr> tags to [HR] marker
+            processed = Regex("""<hr[^>]*/?>.*?""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "\n[HR]\n")
             processed = Regex("""<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).replace(processed) { match ->
                 val href = match.groupValues[1].decodeHtmlEntities()
                 val label = match.groupValues[2].stripTags().decodeHtmlEntities().trim()
@@ -1359,6 +1382,93 @@ class FourD4YService(
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
                 .joinToString("\n")
+        }
+
+        private val discuzColorMap = mapOf(
+            "red" to "#FF0000", "darkred" to "#8B0000",
+            "blue" to "#0000FF", "darkblue" to "#00008B",
+            "green" to "#008000", "darkgreen" to "#006400",
+            "yellow" to "#FFFF00", "orange" to "#FFA500",
+            "pink" to "#FFC0CB", "purple" to "#800080",
+            "brown" to "#A52A2A", "white" to "#FFFFFF",
+            "black" to "#000000", "gray" to "#808080", "grey" to "#808080",
+            "cyan" to "#00FFFF", "magenta" to "#FF00FF",
+            "lime" to "#00FF00", "olive" to "#808000",
+            "navy" to "#000080", "teal" to "#008080",
+            "silver" to "#C0C0C0", "maroon" to "#800000",
+            "deeppink" to "#FF1493", "tomato" to "#FF6347",
+            "coral" to "#FF7F50", "gold" to "#FFD700",
+            "indigo" to "#4B0082", "violet" to "#EE82EE",
+            "sienna" to "#A0522D", "chocolate" to "#D2691E",
+        )
+
+        fun cleanContentHtml(html: String): String {
+            var processed = html
+                .replace(Regex("""<div\s+class=["']t_attach["'][^>]*>.*?</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+                .replace(Regex("""<ignore_js_op>.*?</ignore_js_op>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            // Remove smiley / UI images, resolve relative URLs for content images
+            processed = Regex("""<img[^>]+src=["']([^"']+)["'][^>]*>""", RegexOption.IGNORE_CASE).replace(processed) { match ->
+                val src = match.groupValues[1]
+                if (src.contains("smilies") || src.contains("images/default") || src.contains("images/common") || src.contains("common/back.gif")) {
+                    ""
+                } else {
+                    val resolved = if (src.startsWith("http")) src else "https://www.4d4y.com/forum/$src"
+                    """<img src="$resolved">"""
+                }
+            }
+            // Remove redirect-only links, keep content links
+            processed = Regex("""<a[^>]+href=["'][^"']*redirect\.php\?goto=findpost[^"']*["'][^>]*>.*?</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
+            // Style blockquotes
+            processed = Regex("""<div\s+class=["']quote["'][^>]*>\s*<blockquote>\s*(.*?)\s*</blockquote>\s*</div>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { m ->
+                    """<div style="border-left:3px solid #888;padding-left:8px;color:#666;">${m.groupValues[1]}</div>"""
+                }
+            // Strip small font tags without color, keep inner content
+            processed = Regex("""<font(?![^>]*color\s*=)[^>]+size\s*=\s*["']?(\d+)["']?[^>]*>(.*?)</font>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { m ->
+                    val size = m.groupValues[1].toIntOrNull() ?: 99
+                    if (size <= 4) m.groupValues[2] else m.value
+                }
+            // Normalize font color values to #RRGGBB for Html.fromHtml compatibility
+            processed = Regex("""<font([^>]*color\s*=\s*["']?)([^"';>\s]+)(["']?[^>]*)>""", RegexOption.IGNORE_CASE).replace(processed) { m ->
+                val prefix = m.groupValues[1]
+                val rawColor = m.groupValues[2].trim()
+                val suffix = m.groupValues[3]
+                val normalized = when {
+                    rawColor.startsWith("#") -> {
+                        val hex = rawColor.substring(1)
+                        when {
+                            hex.length == 3 -> "#${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}"
+                            hex.length in 4..5 -> "#${hex.padEnd(6, '0')}"
+                            hex.length == 6 -> rawColor
+                            hex.length == 8 -> "#${hex.substring(2)}"
+                            else -> rawColor
+                        }
+                    }
+                    else -> discuzColorMap[rawColor.lowercase()] ?: rawColor
+                }
+                "<font${prefix}$normalized$suffix>"
+            }
+            // Resolve relative hrefs
+            processed = Regex("""<a([^>]+href=["'])([^"']+)(["'][^>]*)>""", RegexOption.IGNORE_CASE).replace(processed) { m ->
+                val href = m.groupValues[2]
+                if (href.startsWith("http") || href.startsWith("#") || href.startsWith("javascript:")) m.value
+                else "<a${m.groupValues[1]}https://www.4d4y.com/forum/$href${m.groupValues[3]}>"
+            }
+            // Collapse consecutive <br> tags (with optional whitespace/newlines between) into single <br>
+            processed = Regex("""(?:<br\s*/?>[\s\n]*){2,}""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "<br>")
+            // Remove empty paragraphs (including those with only &nbsp; or whitespace)
+            processed = Regex("""<p[^>]*>(?:\s|&nbsp;|\u00a0)*</p>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "")
+            // Collapse consecutive <hr> tags into one
+            processed = Regex("""(?:<hr[^>]*/?>[\s\n]*){2,}""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed, "<hr>")
+            // Remove <br> immediately before or after <hr>
+            processed = Regex("""<br\s*/?>\s*<hr|<hr[^>]*/?>\s*<br\s*/?>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                .replace(processed) { m -> if (m.value.contains("<hr")) m.value.replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "") else m.value }
+            return """<div style="line-height:1.6;">$processed</div>"""
         }
 
     }

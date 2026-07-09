@@ -6,6 +6,9 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.text.Html
+import android.text.method.LinkMovementMethod
+import android.widget.TextView as AndroidTextView
 import android.speech.tts.UtteranceProgressListener
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -153,6 +156,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
@@ -1319,12 +1325,16 @@ private fun ThreadDetailScreen(
                             }
                             Text(thread.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(10.dp))
-                            ParsedContent(
-                                content = thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) },
-                                onImageClick = onOpenImage,
-                                onLinkClick = onOpenLink,
-                                useAccentLinkColor = ThreadDetailRenderingPolicy.usesAccentLinkColor(site),
-                            )
+                            if (thread.contentHtml != null) {
+                                HtmlContent(thread.contentHtml.orEmpty())
+                            } else {
+                                ParsedContent(
+                                    content = thread.content.ifBlank { stringResource(R.string.cached_content_placeholder) },
+                                    onImageClick = onOpenImage,
+                                    onLinkClick = onOpenLink,
+                                    useAccentLinkColor = ThreadDetailRenderingPolicy.usesAccentLinkColor(site),
+                                )
+                            }
                             firstImageUrl?.let { imageUrl ->
                                 TextButton(onClick = { onOpenImage(imageUrl) }) { Text(stringResource(R.string.open_image_viewer)) }
                             }
@@ -3459,6 +3469,25 @@ private fun FeedflowProgressLine(visible: Boolean) {
 }
 
 @Composable
+private fun HtmlContent(html: String) {
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val textSize = 15.sp
+    AndroidView(
+        factory = { context ->
+            AndroidTextView(context).apply {
+                setText(Html.fromHtml(html, Html.FROM_HTML_MODE_COMPACT))
+                movementMethod = LinkMovementMethod.getInstance()
+                setTextColor(textColor.toArgb())
+                this.textSize = textSize.value
+                setLineSpacing(0f, 1.4f)
+                setPadding(0, 4, 0, 4)
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
 private fun ParsedContent(
     content: String,
     onImageClick: ((String) -> Unit)? = null,
@@ -3496,6 +3525,11 @@ private fun ParsedContent(
                         .clip(RoundedCornerShape(12.dp))
                         .then(if (onImageClick != null) Modifier.clickable { onImageClick(block.url) } else Modifier),
                 )
+                is ContentBlock.HorizontalRule -> HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    thickness = 2.dp,
+                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                )
             }
         }
     }
@@ -3531,22 +3565,73 @@ private fun LinkedText(
         }
     } else {
         val firstLink = segments.firstNotNullOfOrNull { it as? LinkSegment.Link }
-        Text(
-            segments.joinToString("") { segment ->
-                when (segment) {
-                    is LinkSegment.Plain -> segment.text
-                    is LinkSegment.Link -> segment.title
+        val defaultColor = if (firstLink != null) linkColor else MaterialTheme.colorScheme.onSurface
+        val hasFormatting = segments.any { it is LinkSegment.Bold || it is LinkSegment.Colored }
+        if (hasFormatting) {
+            val annotated = buildAnnotatedString {
+                segments.forEach { seg ->
+                    appendStyledSegment(seg, defaultColor, headingWeight)
                 }
-            },
-            modifier = if (firstLink != null && onLinkClick != null) {
-                Modifier.clickable { onLinkClick(firstLink.url, firstLink.title) }
-            } else {
-                Modifier
-            },
-            color = if (firstLink != null) linkColor else MaterialTheme.colorScheme.onSurface,
-            fontWeight = headingWeight,
-            style = textStyle,
-        )
+            }
+            Text(
+                text = annotated,
+                modifier = if (firstLink != null && onLinkClick != null) {
+                    Modifier.clickable { onLinkClick(firstLink.url, firstLink.title) }
+                } else {
+                    Modifier
+                },
+                style = textStyle,
+            )
+        } else {
+            Text(
+                segments.joinToString("") { segment ->
+                    when (segment) {
+                        is LinkSegment.Plain -> segment.text
+                        is LinkSegment.Link -> segment.title
+                        is LinkSegment.Bold -> ""
+                        is LinkSegment.Colored -> ""
+                    }
+                },
+                modifier = if (firstLink != null && onLinkClick != null) {
+                    Modifier.clickable { onLinkClick(firstLink.url, firstLink.title) }
+                } else {
+                    Modifier
+                },
+                color = if (firstLink != null) linkColor else MaterialTheme.colorScheme.onSurface,
+                fontWeight = headingWeight,
+                style = textStyle,
+            )
+        }
+    }
+}
+
+private fun androidx.compose.ui.text.AnnotatedString.Builder.appendStyledSegment(
+    segment: LinkSegment,
+    defaultColor: Color,
+    baseWeight: FontWeight,
+) {
+    when (segment) {
+        is LinkSegment.Plain -> {
+            withStyle(SpanStyle(color = defaultColor, fontWeight = baseWeight)) {
+                append(segment.text)
+            }
+        }
+        is LinkSegment.Link -> {
+            withStyle(SpanStyle(color = defaultColor, fontWeight = FontWeight.SemiBold)) {
+                append(segment.title)
+            }
+        }
+        is LinkSegment.Bold -> {
+            segment.inner.forEach { inner ->
+                appendStyledSegment(inner, defaultColor, FontWeight.Bold)
+            }
+        }
+        is LinkSegment.Colored -> {
+            val parsed = runCatching { Color(android.graphics.Color.parseColor(segment.color)) }.getOrNull() ?: defaultColor
+            segment.inner.forEach { inner ->
+                appendStyledSegment(inner, parsed, baseWeight)
+            }
+        }
     }
 }
 

@@ -29,6 +29,7 @@ data class FeedThread(
     var tags: List<String>? = null,
     val lastPostTime: String? = null,
     val lastPosterName: String? = null,
+    val contentHtml: String? = null,
 )
 
 data class Comment(
