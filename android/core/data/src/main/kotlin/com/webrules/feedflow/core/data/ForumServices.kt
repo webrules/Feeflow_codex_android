@@ -1387,10 +1387,6 @@ class ZhihuService(
     )
 
     override suspend fun fetchCategories(): List<Community> = ZhihuParser.categories
-
-    fun normalizedAvatarUrl(url: String?, template: String? = null): String =
-        ZhihuParser.normalizedAvatarUrl(url, template)
-
     override val currentUsername: String?
         get() = null
 
@@ -1691,7 +1687,7 @@ class ZhihuService(
         val limit = 20
         val offset = (page - 1) * limit
         val encoded = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
-        val url = "https://www.zhihu.com/api/v4/search_v3?q=$encoded&t=content&correction=1&offset=$offset&limit=$limit"
+        val url = "https://www.zhihu.com/api/v4/search_v3?q=$encoded&t=general&correction=1&offset=$offset&limit=$limit"
         val body = runCatching { httpClient.get(url, cookies(), apiHeaders()) }.getOrNull()
             ?: return SearchResult(emptyList(), false)
         val root = ZhihuJson.parse(body)?.obj() ?: return SearchResult(emptyList(), false)
@@ -1704,7 +1700,7 @@ class ZhihuService(
             if (type !in listOf("answer", "article", "question")) return@mapNotNull null
             val objId = obj.longId("id") ?: 0L
             val title = if (type == "answer") {
-                obj.obj("question").str("title")?.takeIf { it.isNotEmpty() } ?: obj.str("title") ?: "无标题"
+                obj.obj("question")?.str("title")?.takeIf { it.isNotEmpty() } ?: obj.str("title") ?: "无标题"
             } else {
                 obj.str("title") ?: "无标题"
             }
