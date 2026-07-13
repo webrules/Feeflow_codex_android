@@ -66,10 +66,14 @@ class AndroidWebLoginCookieBridge(
     }
 
     fun clearSiteCookies(config: SiteLoginConfig) {
-        val existing = cookiesFor(config, config.loginUrl)
+        // Check all the same URLs that cookiesFor checks
+        val existing = cookiesFor(config, null)
         existing.forEach { cookie ->
-            cookieManager.setCookie(config.loginUrl, "${cookie.name}=; Domain=${cookie.domain}; Path=${cookie.path}; Max-Age=0")
+            val targetUrl = "https://${cookie.domain.trimStart('.')}${cookie.path}"
+            cookieManager.setCookie(targetUrl, "${cookie.name}=; Domain=${cookie.domain}; Path=${cookie.path}; Max-Age=0")
         }
+        // Also clear via loginUrl as fallback
+        cookieManager.setCookie(config.loginUrl, "")
         cookieManager.flush()
     }
 

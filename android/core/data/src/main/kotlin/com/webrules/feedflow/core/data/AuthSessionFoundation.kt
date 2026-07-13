@@ -41,7 +41,7 @@ class AuthSessionCoordinator(
             return LoginCaptureResult.Rejected(LoginCaptureFailure.MissingAuthCookie)
         }
 
-        val upgraded = siteCookies.map { CookieMatcher.withThirtyDayExpiry(it, nowMillis()) }
+        val upgraded = siteCookies.map { CookieMatcher.withExpiry(it, config.defaultCookieExpiryMillis, nowMillis()) }
         if (site == ForumSite.FourD4Y) {
             store.removeSetting("4d4y_sid")
             store.removeSetting("detected_4d4y_username")

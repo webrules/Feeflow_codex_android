@@ -42,6 +42,7 @@ data class SiteLoginConfig(
     val requiredCookieName: String? = null,
     val authCookieNameFragments: List<String> = emptyList(),
     val oauthOptions: List<OAuthOption> = emptyList(),
+    val defaultCookieExpiryMillis: Long = 30L * 24 * 60 * 60 * 1000,
 ) {
     fun hasAuthenticatedSession(
         cookies: List<FeedflowCookie>,
@@ -68,7 +69,7 @@ data class SiteLoginConfig(
                 site = site,
                 cookieDomain = "4d4y.com",
                 loginUrl = "https://www.4d4y.com/forum/logging.php?action=login",
-                authCookieNameFragments = listOf("auth", "login", "member"),
+                authCookieNameFragments = listOf("auth", "login", "member", "sid"),
             )
             ForumSite.LinuxDo -> SiteLoginConfig(
                 site = site,
@@ -375,6 +376,11 @@ object RssContentCleaner {
             .lineSequence()
             .map { line -> line.trim().replace(Regex("[ \\t]{2,}"), " ") }
             .joinToString("\n")
+            // Strip common RSS/podcast site boilerplate (navigation, channel info, platform links)
+            .replace(Regex("(?m)^\\s*(?:收听平台|关于|博客全文)\\s*$", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("(?m)^\\s*前往 .+\\s*$"), "")
+            .replace(Regex("(?m)^\\s*订阅 RSS\\s*$"), "")
+            .replace(Regex("(?m)^\\s*一个基于 AI 的 Hacker News 中文播客项目.*$"), "")
             .replace(Regex("(\\s*\\n\\s*){3,}"), "\n\n")
             .trim()
     }
