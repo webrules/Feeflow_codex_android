@@ -201,5 +201,8 @@ object CookieMatcher {
     }
 
     fun withThirtyDayExpiry(cookie: FeedflowCookie, nowMillis: Long = System.currentTimeMillis()): FeedflowCookie =
-        if (cookie.expiresAtMillis == null) cookie.copy(expiresAtMillis = nowMillis + 30L * 24 * 60 * 60 * 1000) else cookie
+        withExpiry(cookie, 30L * 24 * 60 * 60 * 1000, nowMillis)
+
+    fun withExpiry(cookie: FeedflowCookie, durationMillis: Long, nowMillis: Long = System.currentTimeMillis()): FeedflowCookie =
+        if (cookie.expiresAtMillis == null) cookie.copy(expiresAtMillis = nowMillis + durationMillis) else cookie
 }

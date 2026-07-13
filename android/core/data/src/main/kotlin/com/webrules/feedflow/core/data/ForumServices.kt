@@ -176,6 +176,9 @@ class RssService(
 
     private suspend fun FeedThread.withFullArticleContent(): FeedThread {
         if (!id.startsWith("http://", ignoreCase = true) && !id.startsWith("https://", ignoreCase = true)) return this
+        // Skip web extraction if RSS content is already substantial (full-text feed)
+        val meaningfulLength = content.replace(Regex("[^\\p{L}\\p{N}]"), "").length
+        if (meaningfulLength >= 500) return this
         val article = runCatching {
             RssArticleExtractor.extract(
                 html = httpClient.get(id),
@@ -584,6 +587,7 @@ class FourD4YService(
         )
         for (url in urls) {
             val html = runCatching { fetch(url, cookies) }.getOrNull() ?: continue
+            if (isLoginPageResponse(html)) return false
             rememberAuthenticatedPageArtifacts(html)
             if (validateSessionHtml(html)) return true
         }
@@ -613,13 +617,16 @@ class FourD4YService(
 
     override suspend fun fetchCategoryThreads(categoryId: String, communities: List<Community>, page: Int): List<FeedThread> {
         val cookies = authCookies()
-        if (store?.getSetting("4d4y_sid").isNullOrBlank() && cookies.none { it.name.equals("sid", ignoreCase = true) }) {
+        System.err.println("[LoginDebug] fetchCategoryThreads: catId=$categoryId cookies=${cookies.size} names=${cookies.map { it.name }} hasSid=${hasSid(cookies)}")
+        if (!hasSid(cookies)) {
             fetchCategories()
         }
         val url = categoryUrl(categoryId, page, cookies)
         val html = fetch(url, cookies)
         // Detect login page responses and throw AuthRequired
-        if (isLoginPageResponse(html)) throw FeedflowError.AuthRequired
+        val isLogin = isLoginPageResponse(html)
+        System.err.println("[LoginDebug] fetchCategoryThreads: htmlLen=${html.length} isLogin=$isLogin")
+        if (isLogin) throw FeedflowError.AuthRequired
         rememberAuthenticatedPageArtifacts(html)
         val community = communities.firstOrNull { it.id == categoryId } ?: Community(categoryId, categoryId, "", "4D4Y", 0, 0)
         val threads = FourD4YParser.parseThreadRows(html, community)
@@ -646,7 +653,7 @@ class FourD4YService(
     override suspend fun searchThreads(query: String, page: Int): SearchResult {
         val cookies = authCookies()
         if (cookies.isEmpty()) throw FeedflowError.AuthRequired
-        if (store?.getSetting("4d4y_sid").isNullOrBlank() && cookies.none { it.name.equals("sid", ignoreCase = true) }) {
+        if (!hasSid(cookies)) {
             fetchCategories()
         }
         val url = withSid(
@@ -660,6 +667,10 @@ class FourD4YService(
 
     private fun authCookies(): List<com.webrules.feedflow.core.network.FeedflowCookie> =
         store?.getCookies(id).orEmpty().filter { it.domain.contains("4d4y.com") }
+
+    private fun hasSid(cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): Boolean =
+        store?.getSetting("4d4y_sid")?.isNotBlank() == true ||
+            cookies.any { it.name.equals("sid", ignoreCase = true) || it.name.equals("cdb_sid", ignoreCase = true) }
 
     private suspend fun fetch(url: String, cookies: List<com.webrules.feedflow.core.network.FeedflowCookie>): String =
         httpClient.get(url, cookies, FOURD4Y_HEADERS, "GB18030")
@@ -706,9 +717,17 @@ class FourD4YService(
 
     private fun isLoginPageResponse(html: String): Boolean {
         val lower = html.lowercase()
-        return lower.contains("action=login") && lower.contains("logging.php") ||
-            html.contains("\u672a\u767b\u5f55") ||
-            (lower.contains("logging.php") && lower.contains("action=login") && !lower.contains("action=logout"))
+        // If page has logout link or user panel, user IS authenticated — not a login redirect
+        val hasLogout = lower.contains("action=logout") || lower.contains("action%3dlogout") || html.contains("退出")
+        if (hasLogout) return false
+        val hasUserPanel = lower.contains("my.php") || lower.contains("memcp.php") || lower.contains("pm.php")
+        if (hasUserPanel) return false
+        // Check for actual login FORM (not just nav header links to logging.php)
+        val hasLoginForm = lower.contains("logging.php") && lower.contains("action=login") &&
+            (lower.contains("username") || lower.contains("password") ||
+             html.contains("用户名") || html.contains("密码"))
+        val hasNotLoggedIn = html.contains("未登录") || html.contains("您还没有登录") || html.contains("请先登录")
+        return hasLoginForm || hasNotLoggedIn
     }
 
     private fun validateSessionHtml(html: String): Boolean {

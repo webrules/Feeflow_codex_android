@@ -137,6 +137,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -387,6 +388,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
     val store = remember(context, storeOverride) { storeOverride ?: AndroidSqliteFeedflowStore(context) }
     val repository = remember(store, repositoryOverride) { repositoryOverride ?: FeedflowRepository(store = store) }
     var loginRevision by remember { mutableStateOf(0) }
+    val siteLoginRevisions = remember { mutableStateMapOf<ForumSite, Int>() }
     val searchResultCache = remember { mutableMapOf<Pair<ForumSite, String>, LoadableContent<SearchResult>>() }
     val initialHomeState = remember(store) {
         val defaults = FeedflowHomeState()
@@ -454,7 +456,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
         is FeedflowRoute.Communities -> {
             var refreshToken by remember(current.site) { mutableStateOf(0) }
             var content by remember(current.site) { mutableStateOf(appStateController.communities(current.site)) }
-            LaunchedEffect(current.site, refreshToken, loginRevision) {
+            LaunchedEffect(current.site, refreshToken, siteLoginRevisions[current.site] ?: 0) {
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshCommunities(current.site)
             }
@@ -482,7 +484,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             var nextPage by remember(current.site, current.community.id) { mutableStateOf(2) }
             var canLoadMoreTopics by remember(current.site, current.community.id) { mutableStateOf(false) }
             var isLoadingMoreTopics by remember(current.site, current.community.id) { mutableStateOf(false) }
-            LaunchedEffect(current.site, current.community.id, refreshToken, loginRevision) {
+            LaunchedEffect(current.site, current.community.id, refreshToken, siteLoginRevisions[current.site] ?: 0) {
                 content = content.copy(isLoading = true)
                 content = appStateController.refreshThreads(current.site, current.community)
                 nextPage = 2
@@ -675,6 +677,7 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
                 SiteLoginConfig.forSite(site)?.let(cookieBridge::clearSiteCookies)
                 authCoordinator.logout(site)
                 loginRevision += 1
+                siteLoginRevisions[site] = (siteLoginRevisions[site] ?: 0) + 1
                 appStateController.setSignedIn(site, false)
                 homeState = appStateController.homeState.copy(signedInSites = signedInSites)
             },
@@ -781,7 +784,9 @@ fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: F
             storedCookies = store.getCookies(current.site.serviceId).orEmpty(),
             validateSession = { appStateController.restoreSession(current.site) },
             onAccepted = {
+                android.util.Log.d("LoginDebug", "onAccepted: site=${current.site} returnTo=${current.returnTo}")
                 loginRevision += 1
+                siteLoginRevisions[current.site] = (siteLoginRevisions[current.site] ?: 0) + 1
                 appStateController.sessionChanged(current.site)
                 appStateController.setSignedIn(current.site, true)
                 homeState = appStateController.homeState.copy(signedInSites = signedInSites)
@@ -2165,8 +2170,11 @@ private fun WebLoginSheetScreen(
         if (isSaving || accepted || config == null) return
         isSaving = true
         saveError = null
+        val captured = cookieBridge.cookiesFor(config, currentUrl)
+        android.util.Log.d("LoginDebug", "saveSession: url=$currentUrl captured=${captured.size} cookies=${captured.map { "${it.name}=${it.value.take(12)}" }}")
         when (val result = cookieBridge.capture(site, config, currentUrl, authCoordinator)) {
             is LoginCaptureResult.Success -> {
+                android.util.Log.d("LoginDebug", "saveSession SUCCESS: ${result.cookies.size} cookies")
                 cookieBridge.flush()
                 if (site == ForumSite.FourD4Y) {
                     authCoordinator.rememberFourD4YSid(capturedFourD4YSid)
@@ -2215,18 +2223,19 @@ private fun WebLoginSheetScreen(
                     factory = { context ->
                         WebView(context).apply {
                             cookieBridge.configure(this)
-                            // Clear stale WebView cookies to force a fresh login
-                            android.webkit.CookieManager.getInstance().removeAllCookies(null)
-                            android.webkit.CookieManager.getInstance().flush()
+                            // Clear only this site's stale WebView cookies to force a fresh login
+                            config?.let { cookieBridge.clearSiteCookies(it) }
                             webViewClient = object : WebViewClient() {
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     currentUrl = url
                                     val shouldSave = config != null && url != null &&
                                         (config.isPostLoginNavigation(url) || !config.isLoginUrl(url))
                                     if (site == ForumSite.FourD4Y && view != null) {
+                                        // Extract SID from URL first (synchronous)
                                         capturedFourD4YSid = url
                                             ?.let { Regex("""[?&]sid=([A-Za-z0-9]+)""").find(it)?.groupValues?.get(1) }
                                             ?: capturedFourD4YSid
+                                        // Then extract SID from page links (async, may find a fresher one)
                                         view.evaluateJavascript(
                                             """
                                             (function() {
