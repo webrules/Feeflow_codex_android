@@ -126,7 +126,10 @@ class UrlConnectionFeedflowHttpClient(
             setRequestProperty("User-Agent", userAgent)
             setRequestProperty("Accept", "text/html,application/json,application/xml,text/xml,*/*")
             headers.forEach { (key, value) -> setRequestProperty(key, value) }
-            CookieMatcher.matchingCookieHeader(url, cookies)?.let { setRequestProperty("Cookie", it) }
+            // Use CookieHandler (system-level) when no explicit cookies provided
+            if (cookies.isNotEmpty()) {
+                CookieMatcher.matchingCookieHeader(url, cookies)?.let { setRequestProperty("Cookie", it) }
+            }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", contentType)

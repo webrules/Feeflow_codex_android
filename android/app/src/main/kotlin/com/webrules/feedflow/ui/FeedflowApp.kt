@@ -179,7 +179,10 @@ import com.webrules.feedflow.core.data.BackgroundPrefetchPolicy
 import java.time.Duration
 import com.webrules.feedflow.core.data.AvatarRenderingPolicy
 import com.webrules.feedflow.core.data.ContentBlock
+import android.webkit.CookieManager
 import com.webrules.feedflow.core.data.FeedflowRepository
+import com.webrules.feedflow.core.data.makeService
+import com.webrules.feedflow.core.network.UrlConnectionFeedflowHttpClient
 import com.webrules.feedflow.core.data.FeedflowContentRenderer
 import com.webrules.feedflow.core.data.FeedflowAppStateController
 import com.webrules.feedflow.core.data.FeedflowError
@@ -386,7 +389,20 @@ private class AndroidTtsController(
 fun FeedflowApp(repositoryOverride: FeedflowRepository? = null, storeOverride: FeedflowStore? = null) {
     val context = LocalContext.current
     val store = remember(context, storeOverride) { storeOverride ?: AndroidSqliteFeedflowStore(context) }
-    val repository = remember(store, repositoryOverride) { repositoryOverride ?: FeedflowRepository(store = store) }
+    val httpClient = remember { UrlConnectionFeedflowHttpClient() }
+    val repository = remember(store, repositoryOverride, httpClient) {
+        repositoryOverride ?: FeedflowRepository(
+            store = store,
+            httpClient = httpClient,
+            serviceFactory = { site ->
+                if (site == ForumSite.FourD4Y) {
+                    site.makeService(store, httpClient, cookieHeaderProvider = { url -> CookieManager.getInstance().getCookie(url) })
+                } else {
+                    site.makeService(store, httpClient)
+                }
+            },
+        )
+    }
     var loginRevision by remember { mutableStateOf(0) }
     val siteLoginRevisions = remember { mutableStateMapOf<ForumSite, Int>() }
     val searchResultCache = remember { mutableMapOf<Pair<ForumSite, String>, LoadableContent<SearchResult>>() }
@@ -2176,6 +2192,7 @@ private fun WebLoginSheetScreen(
             is LoginCaptureResult.Success -> {
                 android.util.Log.d("LoginDebug", "saveSession SUCCESS: ${result.cookies.size} cookies")
                 cookieBridge.flush()
+                cookieBridge.syncToSystemCookieHandler(config, result.cookies)
                 if (site == ForumSite.FourD4Y) {
                     authCoordinator.rememberFourD4YSid(capturedFourD4YSid)
                 }
